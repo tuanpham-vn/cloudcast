@@ -2,20 +2,16 @@ import tensorflow as tf
 from tensorflow.data import AUTOTUNE
 import numpy as np
 import glob
+import os
 from datetime import datetime, timedelta
 from enum import Enum
 import copy
+import sys
+from base.fileutils import get_npy_files, DATA_DIR
 from base.preprocess import (
-    create_topography_data,
-    create_terrain_type_data,
     create_squeezed_leadtime_conditioning,
-    create_datetime,
-    create_sun_elevation_angle,
-    create_sun_elevation_angle_data,
     get_img_size,
 )
-from base.gributils import read_gribs
-from base.fileutils import read_filenames
 
 OpMode = Enum("OperatingMode", ["TRAIN", "INFER", "VERIFY"])
 
@@ -69,13 +65,7 @@ def read_datas_from_preformatted_file(all_times, all_data, req_times, toc):
     return datas, req_times
 
 
-def fix_sun_angle_date(ts):
-    if ts.month == 2 and ts.day == 29:
-        ts = ts.replace(day=28)
-
-    ts = ts.replace(year=2023)
-
-    return ts
+# Đã loại bỏ hàm fix_sun_angle_date vì không còn cần thiết
 
 
 class DataSeriesGenerator:
@@ -121,28 +111,22 @@ class DataSeriesGenerator:
 
         x = np.concatenate((x, lt), axis=0)
 
-        ts = datetime.strptime(xtimes[-1], "%Y%m%dT%H%M%S")  # "analysis time"
-        y_time = ts + timedelta(minutes=(1 + lc) * 15)
+        # Xử lý cả 2 định dạng thời gian: %Y%m%dT%H%M%S và %Y-%m-%dT%H%M
+        try:
+            # Định dạng cũ: %Y%m%dT%H%M%S
+            ts = datetime.strptime(xtimes[-1], "%Y%m%dT%H%M%S")
+        except ValueError:
+            try:
+                # Định dạng mới: %Y-%m-%dT%H%M
+                ts = datetime.strptime(xtimes[-1], "%Y-%m-%dT%H%M")
+            except ValueError:
+                print(f"Không thể phân tích định dạng thời gian: {xtimes[-1]}")
+                raise
+                
+        # Sử dụng khoảng thời gian 10 phút thay vì 15 phút
+        y_time = ts + timedelta(minutes=(1 + lc) * 10)
 
-        if X[self.n_channels + 1]:
-            tod, toy = create_datetime(y_time, self.img_size)
-            tod = np.expand_dims(tod, axis=0)
-            toy = np.expand_dims(toy, axis=0)
-            x = np.concatenate((x, tod, toy), axis=0)
-
-        if X[self.n_channels + 2]:
-            x = np.concatenate((x, self.topography_data), axis=0)
-
-        if X[self.n_channels + 3]:
-            x = np.concatenate((x, self.terrain_type_data), axis=0)
-
-        if X[self.n_channels + 4]:
-            angle = self.sun_elevation_angle_data[
-                fix_sun_angle_date(y_time).strftime("%Y%m%dT%H%M%S")
-            ]
-            angle = np.expand_dims(angle, axis=0)
-            angle = tf.image.resize(angle, self.img_size)
-            x = np.concatenate((x, angle), axis=0)
+        # Đã loại bỏ các tính năng không cần thiết (datetime, topography, terrain_type, sun_elevation_angle)
 
         x = np.squeeze(np.swapaxes(x, 0, 3))
 
@@ -176,32 +160,22 @@ class DataSeriesGenerator:
             )
 
         else:
-            x = read_gribs(
-                x_elems,
-                dtype=np.single,
-                disable_preprocess=True,
-                enable_cache=self.cache,
-                print_filename=self.debug,
-            )
-
-            x = tf.image.resize(x, self.img_size)
-
-            xtimes = list(map(lambda x: x.split("/")[-1].split("_")[0], x_elems))
-
-            if self.operating_mode in (OpMode.TRAIN, OpMode.VERIFY):
-                y = read_gribs(
-                    y_elems,
-                    dtype=np.single,
-                    disable_preprocess=True,
-                    enable_cache=self.cache,
-                    print_filename=self.debug,
-                )
-
-                y = tf.image.resize(y, self.img_size)
-
-                ytimes = list(map(lambda x: x.split("/")[-1].split("_")[0], y_elems))
-            else:
-                y = np.full((1,) + self.img_size + (1,), np.NaN)
+            # Xử lý dữ liệu .npz
+            print("Đang xử lý dữ liệu .npz từ thư mục {}".format(DATA_DIR))
+            # Tải dữ liệu từ tệp .npz
+            x = []
+            for elem in x_elems:
+                file_path = os.path.join(DATA_DIR, elem + ".npz")
+                data = np.load(file_path)["data"]
+                x.append(data)
+            
+            y = []
+            for elem in y_elems:
+                file_path = os.path.join(DATA_DIR, elem + ".npz")
+                data = np.load(file_path)["data"]
+                y.append(data)
+            
+            return x, y, x_elems, y_elems
 
         return x, y, xtimes, ytimes
 
@@ -226,21 +200,12 @@ class LazyDataSeries:
                 kwargs.get("leadtime_conditioning", opts.leadtime_conditioning)
             )
             self.img_size = get_img_size(opts.preprocess)
-            self.include_datetime = opts.include_datetime
-            self.include_topography = opts.include_topography
-            self.include_terrain_type = opts.include_terrain_type
-            self.include_sun_elevation_angle = opts.include_sun_elevation_angle
 
         except KeyError:
             self.n_channels = int(kwargs.get("n_channels"))
             self.img_size = kwargs.get("img_size")
             self.leadtime_conditioning = int(kwargs.get("leadtime_conditioning"))
-            self.include_datetime = kwargs.get("include_datetime", False)
-            self.include_topography = kwargs.get("include_topography", False)
-            self.include_terrain_type = kwargs.get("include_terrain_type", False)
-            self.include_sun_elevation_angle = kwargs.get(
-                "include_sun_elevation_angle", False
-            )
+            # Đã loại bỏ các tính năng không cần thiết
 
         self.batch_size = int(kwargs.get("batch_size", 1))
         self.dataseries_file = kwargs.get("dataseries_file", None)
@@ -301,6 +266,7 @@ class LazyDataSeries:
         # Read static datas, so that each dataset generator
         # does not have to read them
 
+        # Chỉ giữ lại leadtime_conditioning
         if self.leadtime_conditioning > 0:
             leadtimes = np.asarray(
                 [
@@ -311,30 +277,6 @@ class LazyDataSeries:
                 ]
             )
             self.leadtimes = np.squeeze(leadtimes, 1)
-
-        if self.include_topography:
-            self.topography_data = np.expand_dims(
-                create_topography_data(self.img_size), axis=0
-            )
-
-        if self.include_terrain_type:
-            self.terrain_type_data = np.expand_dims(
-                create_terrain_type_data(self.img_size), axis=0
-            )
-
-        if self.include_sun_elevation_angle:
-            if self.operating_mode == OpMode.INFER:
-                self.sun_elevation_angle_data = {}
-                for i in range(self.leadtime_conditioning):
-                    ts = self.analysis_time + timedelta(minutes=(1 + i) * 15)
-                    ts = fix_sun_angle_date(ts)
-                    self.sun_elevation_angle_data[
-                        ts.strftime("%Y%m%dT%H%M%S")
-                    ] = create_sun_elevation_angle(ts, (128, 128))
-            else:
-                self.sun_elevation_angle_data = create_sun_elevation_angle_data(
-                    self.img_size,
-                )
 
         # create placeholder data
 
@@ -352,7 +294,10 @@ class LazyDataSeries:
             if self.filenames is not None:
                 self.elements = self.filenames
             else:
-                self.elements = read_filenames(self.start_date, self.stop_date)
+                # Sử dụng get_npy_files thay vì read_filenames
+                self.elements = get_npy_files(DATA_DIR, "*.npz")
+                # Trích xuất tên tệp không có đuôi .npz
+                self.elements = [os.path.basename(f).replace('.npz', '') for f in self.elements]
             self.elements.sort()
 
         i = 0
@@ -379,10 +324,7 @@ class LazyDataSeries:
             for lt in range(self.leadtime_conditioning):
                 x_ = copy.deepcopy(x)
                 x_.append(lt)
-                x_.append(self.include_datetime)
-                x_.append(self.include_topography)
-                x_.append(self.include_terrain_type)
-                x_.append(self.include_sun_elevation_angle)
+                # Đã loại bỏ các tính năng không cần thiết (datetime, topography, terrain_type, sun_elevation_angle)
 
                 if self.operating_mode == OpMode.INFER:
                     y = "nan"  # datetime.strptime(self.elements[-1], '%Y%m%dT%H%M%S') + timedelta(minutes=i*15)
@@ -444,12 +386,9 @@ class LazyDataSeries:
         if placeholder is None:
             placeholder = copy.deepcopy(self._placeholder)
 
+        # Chỉ giữ lại các tính năng cần thiết
         x_dim_len = self.n_channels
         x_dim_len += 1 if self.leadtime_conditioning > 0 else 0
-        x_dim_len += 2 if self.include_datetime else 0
-        x_dim_len += 1 if self.include_topography else 0
-        x_dim_len += 1 if self.include_terrain_type else 0
-        x_dim_len += 1 if self.include_sun_elevation_angle else 0
 
         sig = (
             tf.TensorSpec(

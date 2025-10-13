@@ -27,6 +27,7 @@ from fss import make_FSS_loss
 from ssim import make_SSIM_loss, make_MS_SSIM_loss
 from ks import make_KS_loss
 from bcl1 import make_bc_l1_loss
+from mae import make_MAE_loss
 
 from tensorflow.keras import mixed_precision
 from tensorflow.python.client import device_lib
@@ -78,6 +79,8 @@ def get_loss_function(loss_function):
         return make_SSIM_loss(int(values[1]))
     elif loss_function == "bcl1":
         return make_bc_l1_loss()
+    elif loss_function == "mae":
+        return make_MAE_loss()
     elif loss_function.startswith("fss"):
         values = loss_function.split("_")
         if len(values) == 1:
