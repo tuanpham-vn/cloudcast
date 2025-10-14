@@ -78,6 +78,10 @@ while [[ $# -gt 0 ]]; do
             N_CHANNELS="$2"
             shift 2
             ;;
+        --loss_function)
+            LOSS_FUNCTION="$2"
+            shift 2
+            ;;
         --leadtime_conditioning)
             LEADTIME_CONDITIONING="$2"
             shift 2
@@ -105,6 +109,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --dataseries_directory DIR   Path to directory with multiple NPZ files (must have .npz extension)"
             echo "  --label LABEL               Training label (default: $LABEL)"
             echo "  --n_channels N              Number of input channels (default: $N_CHANNELS)"
+            echo "  --loss_function NAME        Loss: MeanSquaredError | ssim | msssim | bcl1 | fss | ks | coss | mae | ssim_mae[_wSSIM_wMAE]"
             echo "  --leadtime_conditioning N   Lead time conditioning (default: $LEADTIME_CONDITIONING)"
             echo "  --sequence_stride_minutes N Sequence stride in minutes (default: $SEQUENCE_STRIDE_MINUTES)"
             echo "  --sequence_offset_minutes N Sequence offset in minutes (default: $SEQUENCE_OFFSET_MINUTES)"
@@ -212,6 +217,33 @@ echo "Log saved to: $LOG_FILE"
 # ========================================
 # EXAMPLE COMMANDS
 # ========================================
+#
+# 0. Training với loss SSIM + MAE (50%/50% mặc định):
+# bash train_cloudcast.sh \
+#   --dataseries_directory data \
+#   --label ssim_mae_50_50 \
+#   --loss_function ssim_mae
+#   # Lưu ý: thiết lập loss trong Python bằng tham số --loss_function ssim_mae khi gọi trực tiếp
+#
+#   # Nếu dùng trực tiếp python:
+#   # python cloudcast/cloudcast-unet.py \
+#   #   --dataseries_directory data \
+#   #   --label ssim_mae_50_50 \
+#   #   --loss_function ssim_mae
+#
+# 0b. Fine-tune với SSIM + MAE (50%/50%) và LR mặc định 1e-5:
+# ./train_cloudcast.sh \
+#   --dataseries_directory data \
+#   --label "ft_ssim_mae_50_50" \
+#   --checkpoint_path checkpoints/your_model/model.weights.h5
+#   # (không cần --learning_rate, script và Python sẽ dùng mặc định 1e-5 cho fine-tuning)
+#
+# 0c. Training với SSIM + MAE trọng số 70%/30%:
+# # Dùng trực tiếp python để truyền loss:
+# # python cloudcast/cloudcast-unet.py \
+# #   --dataseries_directory data \
+# #   --label ssim_mae_70_30 \
+# #   --loss_function ssim_mae_0.7_0.3
 #
 # 1. Training với single NPZ file:
 # ./train_cloudcast.sh --dataseries_file data/patch000_2025-09-03_2025-10-08_patches_512512_float32.npz --label "single_patch_10min"

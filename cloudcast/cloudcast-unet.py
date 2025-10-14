@@ -17,6 +17,7 @@ import json
 import sys
 import tensorflow as tf
 from tensorflow import keras
+import numpy as np
 
 EPOCHS = 500
 
@@ -107,6 +108,16 @@ def parse_command_line():
         args.stop_date = datetime.datetime.strptime(args.stop_date, "%Y-%m-%d")
 
     return args, opts
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        return json.JSONEncoder.default(self, obj)
+
 
 
 def get_batch_size(img_size):
@@ -330,7 +341,7 @@ def run_model(args, opts):
     
     # Lưu lịch sử huấn luyện
     with open(f"{model_dir}/history.json", "w") as f:
-        json.dump(hist.history, f)
+        json.dump(hist.history, f, cls=NumpyEncoder)
 
     print(f"Model training finished in {duration}")
 
