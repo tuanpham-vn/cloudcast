@@ -148,6 +148,19 @@ def get_metrics():
         "MeanAbsoluteError",
     ]  # , make_FSS_loss(20, 0), make_SSIM_loss(21), make_KS_loss(21)]
 
+def get_combined_metrics():
+    """Get metrics for combined loss functions"""
+    ssim_metric = make_SSIM_loss()
+    mae_metric = make_MAE_loss()
+    return [ssim_metric, mae_metric]
+
+def get_all_metrics():
+    """Get all available metrics for comparison during fine-tuning"""
+    ssim_metric = make_SSIM_loss()
+    mae_metric = make_MAE_loss()
+    bcl1_metric = make_bc_l1_loss()
+    return [ssim_metric, mae_metric, bcl1_metric]
+
 
 def unet(
     pretrained_weights=None,
@@ -212,13 +225,32 @@ def unet(
     model = Model(inputs, outputs)
 
     if compile:
+        # Choose metrics: if SSIM-based loss is used, also report SSIM and MAE metrics
+        metrics = get_metrics()
+        try:
+            lf_name = loss_function if isinstance(loss_function, str) else ""
+        except Exception:
+            lf_name = ""
+        if isinstance(lf_name, str) and (
+            lf_name.startswith("ssim")
+            or lf_name.startswith("msssim")
+            or lf_name.startswith("ssim_mae")
+        ):
+            metrics = get_combined_metrics()
+
         model.compile(
             optimizer=optimizer,
             loss=get_loss_function(loss_function),
-            metrics=get_metrics(),
+            metrics=metrics,
         )
 
     if pretrained_weights is not None:
-        model.load_weights(pretrained_weights)
+        try:
+            # Try loading weights only (skip optimizer state)
+            model.load_weights(pretrained_weights, by_name=True, skip_mismatch=True)
+            print(f"Successfully loaded weights from {pretrained_weights}")
+        except Exception as e:
+            print(f"Warning: Could not load weights from {pretrained_weights}: {e}")
+            print("Continuing with random weights...")
 
     return model

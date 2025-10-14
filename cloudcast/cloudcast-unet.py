@@ -187,7 +187,7 @@ def callbacks(args, opts):
         save_best_only=True,
     )
     early_stopping_cb = keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=7, min_delta=0.001, verbose=1
+        monitor="val_loss", patience=7, min_delta=0.0005, verbose=1
     )
     reduce_lr_cb = keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=5)
     term_nan = keras.callbacks.TerminateOnNaN()
@@ -243,7 +243,7 @@ def run_model(args, opts):
     if opts.leadtime_conditioning:
         n_channels += 1
 
-    # Hiển thị thông tin về hàm loss được sử dụng
+    # Hiển thị thông tin về hàm loss được sử dụng (sau khi có thể đã override)
     print(f"\nSử dụng hàm loss: {args.loss_function}")
     if args.loss_function.startswith("ssim_mae"):
         print("Combined Loss: SSIM + MAE with configurable weights (default 0.5/0.5)")
@@ -298,6 +298,13 @@ def run_model(args, opts):
         except Exception as e:
             print(f"Could not enable mixed precision: {e}")
 
+    # For fine-tuning, try to detect loss function from checkpoint path BEFORE building model
+    if args.checkpoint_path and "ssim_mae" in args.checkpoint_path:
+        detected_loss = "ssim_mae"
+        print(f"Detected loss function from checkpoint path: {detected_loss}")
+        # Override the loss function for fine-tuning
+        args.loss_function = detected_loss
+    
     # Determine learning rate: 1e-5 by default for fine-tuning, else 1e-3
     if args.learning_rate is not None:
         effective_lr = args.learning_rate

@@ -391,67 +391,104 @@ class LazyDataSeries:
                 print("Filtered {} elements by stride {} min with offset {} min".format(removed, stride, offset))
             self.elements = filtered
 
-        i = 0
-
         step = 1 if self.reuse_y_as_x else self.n_channels + self.leadtime_conditioning
-
         n_fut = self.leadtime_conditioning if self.operating_mode != OpMode.INFER else 0
 
-        assert (
-            len(self.elements) - (self.n_channels + n_fut)
-        ) >= 0, "Too few data to make a prediction: {} (need at least {})".format(
-            len(self.elements), self.n_channels + n_fut
-        )
+        # If elements come from directory npz files, they are tuples: (timestamp, file_idx)
+        # We must not create sequences that cross file boundaries. Group by file_idx.
+        has_file_index = len(self.elements) > 0 and isinstance(self.elements[0], tuple)
 
-        while i <= len(self.elements) - (self.n_channels + n_fut):
-            x = list(self.elements[i : i + self.n_channels])
+        if has_file_index:
+            groups = {}
+            for elem in self.elements:
+                # elem is (timestamp, file_idx)
+                file_idx = elem[1]
+                groups.setdefault(file_idx, []).append(elem)
 
-            last_time_str = x[-1][0] if isinstance(x[-1], tuple) else x[-1]
-            if self.hourly_prediction and last_time_str[-4:] != "0000":
+            # Sort each group's elements by timestamp string to ensure correct order
+            for file_idx, elems in groups.items():
+                elems.sort(key=lambda t: t[0])
+
+            # Generate placeholders per file group
+            for file_idx, elems in groups.items():
+                if (len(elems) - (self.n_channels + n_fut)) < 0:
+                    continue
+                i = 0
+                while i <= len(elems) - (self.n_channels + n_fut):
+                    x = list(elems[i : i + self.n_channels])
+
+                    last_time_str = x[-1][0]
+                    if self.hourly_prediction and last_time_str[-4:] != "0000":
+                        i += step
+                        continue
+
+                    for lt in range(self.leadtime_conditioning):
+                        x_ = copy.deepcopy(x)
+                        x_.append(lt)
+
+                        if self.operating_mode == OpMode.INFER:
+                            y = "nan"
+                        else:
+                            y = elems[i + self.n_channels + lt]
+
+                        self._placeholder.append([x_, y])
+
+                    i += step
+        else:
+            # Fallback: original behavior for single-series inputs
+            assert (
+                len(self.elements) - (self.n_channels + n_fut)
+            ) >= 0, "Too few data to make a prediction: {} (need at least {})".format(
+                len(self.elements), self.n_channels + n_fut
+            )
+
+            i = 0
+            while i <= len(self.elements) - (self.n_channels + n_fut):
+                x = list(self.elements[i : i + self.n_channels])
+
+                last_time_str = x[-1][0] if isinstance(x[-1], tuple) else x[-1]
+                if self.hourly_prediction and last_time_str[-4:] != "0000":
+                    i += step
+                    continue
+
+                for lt in range(self.leadtime_conditioning):
+                    x_ = copy.deepcopy(x)
+                    x_.append(lt)
+
+                    if self.operating_mode == OpMode.INFER:
+                        y = "nan"
+                    else:
+                        y = self.elements[i + self.n_channels + lt]
+
+                    self._placeholder.append([x_, y])
+
                 i += step
-                continue
-
-            for lt in range(self.leadtime_conditioning):
-                x_ = copy.deepcopy(x)
-                x_.append(lt)
-
-                if self.operating_mode == OpMode.INFER:
-                    y = "nan"
-                else:
-                    y = self.elements[i + self.n_channels + lt]
-
-                self._placeholder.append([x_, y])
-
-            i += step
 
         assert len(self._placeholder) > 0, "Placeholder array is empty"
 
         # Stats
         if self.dataseries_directory is not None:
-            unique_times = set()
             unique_files = set()
-            for elem in self.elements:
-                if isinstance(elem, tuple):
-                    unique_times.add(elem[0])
-                    unique_files.add(elem[1])
-                else:
-                    unique_times.add(elem)
-            if unique_files:
-                print("=" * 70)
-                print("DATASET STATISTICS:")
-                print("=" * 70)
-                print("Number of patch files:        {}".format(len(unique_files)))
-                print("Unique timestamps per patch:  {}".format(len(unique_times)))
-                print("Total timeseries elements:    {}".format(len(self.elements)))
-                print("Training samples created:     {}".format(len(self._placeholder)))
-                print("Samples per patch (approx):   {}".format(len(self._placeholder) // max(len(unique_files), 1)))
-                print("=" * 70)
+            per_file_counts = {}
+            if len(self.elements) > 0 and isinstance(self.elements[0], tuple):
+                for ts, fidx in self.elements:
+                    unique_files.add(fidx)
+                # recompute per-file unique timestamps
+                for fidx in unique_files:
+                    per_file_counts[fidx] = len({ts for ts, fx in self.elements if fx == fidx})
             else:
-                print(
-                    "Placeholder timeseries length: {} number of samples: {}".format(
-                        len(self.elements), len(self._placeholder)
-                    )
-                )
+                per_file_counts[0] = len(set(self.elements))
+
+            print("=" * 70)
+            print("DATASET STATISTICS:")
+            print("=" * 70)
+            print("Number of patch files:        {}".format(len(unique_files) or 1))
+            print("Total timeseries elements:    {}".format(len(self.elements)))
+            print("Training samples created:     {}".format(len(self._placeholder)))
+            if per_file_counts:
+                avg = len(self._placeholder) // max(len(per_file_counts), 1)
+                print("Samples per patch (approx):   {}".format(avg))
+            print("=" * 70)
         else:
             print(
                 "Placeholder timeseries length: {} number of samples: {}".format(
