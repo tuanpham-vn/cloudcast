@@ -9,9 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Sử dụng môi trường hiện tại
 echo "Sử dụng môi trường hiện tại: $CONDA_DEFAULT_ENV"
 
-# Verify TensorFlow is available
+# Verify TensorFlow is available and show GPUs
 echo "Checking TensorFlow installation..."
-python -c "import tensorflow as tf; print('TensorFlow version:', tf.__version__)" || {
+python -c "import tensorflow as tf; print('TensorFlow version:', tf.__version__); print('GPUs:', tf.config.list_physical_devices('GPU'))" || {
     echo "ERROR: TensorFlow not available in this environment!"
     exit 1
 }
@@ -21,6 +21,24 @@ export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
 
 # Suppress TensorFlow warnings (0=all, 1=filter INFO, 2=filter INFO+WARNING, 3=filter all except ERROR)
 export TF_CPP_MIN_LOG_LEVEL=2
+
+# Disable XLA by default to avoid excessive logs and potential instability on some combos
+unset TF_XLA_FLAGS
+
+# NCCL tuning for multi-GPU
+export NCCL_DEBUG=WARN
+export NCCL_P2P_DISABLE=0
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_IFNAME=^lo,docker0
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+
+# Limit TF threads to mitigate pthread_create failures
+export OMP_NUM_THREADS=2
+export TF_NUM_INTRAOP_THREADS=2
+export TF_NUM_INTEROP_THREADS=2
+
+# Optional: restrict visible GPUs via CUDA_VISIBLE_DEVICES if needed
+# export CUDA_VISIBLE_DEVICES=0,1
 
 # Change to project root directory
 cd "$SCRIPT_DIR"
@@ -39,7 +57,7 @@ LABEL=""
 SEQUENCE_STRIDE_MINUTES=10  # Đã thay đổi từ 20 phút xuống 10 phút
 SEQUENCE_OFFSET_MINUTES=0
 CHECKPOINT_PATH=""
-LEARNING_RATE="0.0005"
+LEARNING_RATE="0.001"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -163,11 +181,19 @@ if [ -n "$LEARNING_RATE" ]; then
 fi
 
 # Create log filename with timestamp
-LOG_FILE="logs/training_$(date +%Y%m%d_%H%M%S).log"
+TS_COMPACT=$(date +%Y%m%d_%H%M%S)
+TS_CHECKPOINT=$(date +%Y_%m_%d_%H%M)
+LOG_FILE="logs/training_${TS_COMPACT}.log"
 echo "Training log will be saved to: $LOG_FILE"
 echo ""
 
+# Show live GPU status before training
+echo "GPU snapshot before training:"
+nvidia-smi || true
+echo ""
+
 # Run the training - output to both terminal and log file
+export CLOUDCAST_TIMESTAMP="$TS_CHECKPOINT"
 python cloudcast/cloudcast-unet.py \
   --loss_function "$LOSS_FUNCTION" \
   --n_channels "$N_CHANNELS" \

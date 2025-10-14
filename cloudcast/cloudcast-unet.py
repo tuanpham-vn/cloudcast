@@ -1,6 +1,7 @@
 import os
+# Reduce TF logs and disable XLA by default to avoid excessive warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['TF_XLA_FLAGS'] = '--tf_xla_auto_jit=2 --tf_xla_min_cluster_size=4'
+os.environ.pop('TF_XLA_FLAGS', None)
 
 from datetime import datetime
 from tensorflow.keras.models import save_model
@@ -14,6 +15,8 @@ import math
 import argparse
 import json
 import sys
+import tensorflow as tf
+from tensorflow import keras
 
 EPOCHS = 500
 
@@ -65,6 +68,8 @@ def parse_command_line():
                       help="Độ lệch thời gian cho chuỗi dữ liệu (phút)")
     parser.add_argument("--learning_rate", action="store", type=float, default=0.0005,
                       help="Tốc độ học cho quá trình huấn luyện")
+    parser.add_argument("--no_mixed_precision", action="store_true", default=False,
+                      help="Disable mixed precision (enabled by default if GPUs available)")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--start_date", action="store", type=str)
@@ -102,17 +107,17 @@ def parse_command_line():
 
 def get_batch_size(img_size):
     if img_size[0] >= 512:
-        batch_size = 4  # Độ phân giải cao 512x512 cần giảm batch size để tiết kiệm bộ nhớ
+        batch_size = 16  # Độ phân giải cao 512x512 cần giảm batch size để tiết kiệm bộ nhớ
     elif img_size[0] >= 384:
-        batch_size = 4
-    elif img_size[0] >= 256:
-        batch_size = 8
-    elif img_size[0] >= 224:
-        batch_size = 12
-    elif img_size[0] >= 128:
         batch_size = 16
-    else:
+    elif img_size[0] >= 256:
+        batch_size = 16
+    elif img_size[0] >= 224:
+        batch_size = 16
+    elif img_size[0] >= 128:
         batch_size = 32
+    else:
+        batch_size = 64
 
     return batch_size
 
@@ -240,16 +245,49 @@ def run_model(args, opts):
         print("Mean Squared Error - Hàm loss cơ bản, tính trung bình bình phương sai số")
     print()
     
-    # Sử dụng learning rate từ tham số đầu vào
-    optimizer = keras.optimizers.Adam(learning_rate=args.learning_rate)
-    print(f"Learning rate: {args.learning_rate}")
-    
-    m = unet(
-        pretrained_weights,
-        input_size=img_size + (n_channels,),
-        loss_function=args.loss_function,
-        optimizer=optimizer,
-    )
+    # Configure GPUs: memory growth and distribution strategy
+    gpus = tf.config.list_physical_devices('GPU')
+    if len(gpus) > 0:
+        for gpu in gpus:
+            try:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            except Exception:
+                pass
+    # Limit intra/inter op threads to avoid pthread_create failures on large models
+    try:
+        tf.config.threading.set_intra_op_parallelism_threads(2)
+        tf.config.threading.set_inter_op_parallelism_threads(2)
+    except Exception:
+        pass
+    if len(gpus) >= 2:
+        strategy = tf.distribute.MirroredStrategy()
+        print(f"Using MirroredStrategy on {strategy.num_replicas_in_sync} devices")
+    else:
+        strategy = tf.distribute.get_strategy()
+        if len(gpus) == 1:
+            print("Using single GPU")
+        else:
+            print("No GPU detected, using CPU")
+
+    # Enable mixed precision by default when GPUs are available
+    if len(gpus) > 0 and not args.no_mixed_precision:
+        try:
+            from tensorflow.keras import mixed_precision
+            mixed_precision.set_global_policy('mixed_float16')
+            print("Mixed precision enabled (mixed_float16)")
+        except Exception as e:
+            print(f"Could not enable mixed precision: {e}")
+
+    # Build model under distribution strategy scope
+    with strategy.scope():
+        optimizer = keras.optimizers.Adam(learning_rate=args.learning_rate)
+        print(f"Learning rate: {args.learning_rate}")
+        m = unet(
+            pretrained_weights,
+            input_size=img_size + (n_channels,),
+            loss_function=args.loss_function,
+            optimizer=optimizer,
+        )
 
     start = datetime.datetime.now()
 
@@ -259,6 +297,21 @@ def run_model(args, opts):
 
     save_model(m, model_dir)
     save_model_info(args, opts, duration, hist.history, model_dir)
+
+    # Save final checkpoint with timestamp YYYY_MM_DD_HHMM
+    ts_env = os.environ.get("CLOUDCAST_TIMESTAMP")
+    try:
+        ts_final = ts_env if ts_env else datetime.now().strftime("%Y_%m_%d_%H%M")
+    except Exception:
+        ts_final = datetime.now().strftime("%Y_%m_%d_%H%M")
+    final_ckpt_dir = f"checkpoints/{opts.get_label()}"
+    os.makedirs(final_ckpt_dir, exist_ok=True)
+    final_ckpt_path = f"{final_ckpt_dir}/model_{ts_final}.weights.h5"
+    try:
+        m.save_weights(final_ckpt_path)
+        print(f"Saved final checkpoint: {final_ckpt_path}")
+    except Exception as e:
+        print(f"Failed to save final checkpoint to {final_ckpt_path}: {e}")
     
     # Lưu lịch sử huấn luyện
     with open(f"{model_dir}/history.json", "w") as f:
