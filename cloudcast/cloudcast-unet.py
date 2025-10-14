@@ -66,8 +66,10 @@ def parse_command_line():
                       help="Khoảng thời gian giữa các chuỗi dữ liệu liên tiếp (phút)")
     parser.add_argument("--sequence_offset_minutes", action="store", type=int, default=0,
                       help="Độ lệch thời gian cho chuỗi dữ liệu (phút)")
-    parser.add_argument("--learning_rate", action="store", type=float, default=0.0005,
-                      help="Tốc độ học cho quá trình huấn luyện")
+    parser.add_argument("--learning_rate", action="store", type=float, default=None,
+                      help="Tốc độ học cho quá trình huấn luyện. Nếu fine-tune mà không chỉ định, mặc định 1e-5")
+    parser.add_argument("--checkpoint_path", action="store", type=str, default=None,
+                      help="Đường dẫn weights để fine-tune (mặc định dùng 1e-5 nếu không chỉ định learning rate)")
     parser.add_argument("--no_mixed_precision", action="store_true", default=False,
                       help="Disable mixed precision (enabled by default if GPUs available)")
 
@@ -214,7 +216,10 @@ def run_model(args, opts):
     model_dir = "models/{}".format(opts.get_label())
 
     pretrained_weights = None
-    if args.cont:
+    if args.checkpoint_path:
+        pretrained_weights = args.checkpoint_path
+        print(f"Fine-tuning from checkpoint: {pretrained_weights}")
+    elif args.cont:
         pretrained_weights = "checkpoints/{}/model.weights.h5".format(opts.get_label())
         print("Reading old weights from '{}'".format(pretrained_weights))
 
@@ -278,10 +283,16 @@ def run_model(args, opts):
         except Exception as e:
             print(f"Could not enable mixed precision: {e}")
 
+    # Determine learning rate: 1e-5 by default for fine-tuning, else 1e-3
+    if args.learning_rate is not None:
+        effective_lr = args.learning_rate
+    else:
+        effective_lr = 1e-5 if args.checkpoint_path else 1e-3
+
     # Build model under distribution strategy scope
     with strategy.scope():
-        optimizer = keras.optimizers.Adam(learning_rate=args.learning_rate)
-        print(f"Learning rate: {args.learning_rate}")
+        optimizer = keras.optimizers.Adam(learning_rate=effective_lr)
+        print(f"Learning rate: {effective_lr}")
         m = unet(
             pretrained_weights,
             input_size=img_size + (n_channels,),

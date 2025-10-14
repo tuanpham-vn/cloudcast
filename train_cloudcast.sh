@@ -57,7 +57,7 @@ LABEL=""
 SEQUENCE_STRIDE_MINUTES=10  # Đã thay đổi từ 20 phút xuống 10 phút
 SEQUENCE_OFFSET_MINUTES=0
 CHECKPOINT_PATH=""
-LEARNING_RATE="0.001"
+LEARNING_RATE="0.0005"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -164,7 +164,7 @@ if [ -n "$LEARNING_RATE" ]; then
     echo "Learning rate:     $LEARNING_RATE"
 else
     if [ -n "$CHECKPOINT_PATH" ]; then
-        echo "Learning rate:     5e-4 (default for fine-tuning)"
+        echo "Learning rate:     1e-5 (default for fine-tuning)"
     else
         echo "Learning rate:     1e-3 (default for training)"
     fi
@@ -201,6 +201,7 @@ python cloudcast/cloudcast-unet.py \
   --preprocess "img_size=$IMG_SIZE" \
   --sequence_stride_minutes "$SEQUENCE_STRIDE_MINUTES" \
   --sequence_offset_minutes "$SEQUENCE_OFFSET_MINUTES" \
+  ${CHECKPOINT_PATH:+--checkpoint_path "$CHECKPOINT_PATH"} \
   $DATA_ARG \
   $OPTIONAL_ARGS 2>&1 | tee "$LOG_FILE"
 
