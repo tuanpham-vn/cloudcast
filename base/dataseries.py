@@ -16,43 +16,131 @@ from base.preprocess import (
 OpMode = Enum("OperatingMode", ["TRAIN", "INFER", "VERIFY"])
 
 
+def normalize_time_string(ts_str):
+    """Normalize timestamp strings to format YYYYMMDDTHHMMSS.
+
+    Accepts inputs like 'YYYY-MM-DDTHHMM' and returns 'YYYYMMDDTHHMMSS'.
+    """
+    s = str(ts_str)
+    if "T" in s:
+        date_part, time_part = s.split("T", 1)
+        date_part = date_part.replace("-", "")
+        if len(time_part) == 4:
+            time_part = time_part + "00"
+        elif len(time_part) == 6:
+            pass
+        else:
+            time_part = (time_part + "000000")[:6]
+        return f"{date_part}T{time_part}"
+    s = s.replace("-", "")
+    if "T" not in s and len(s) >= 8:
+        return s
+    return s
+
+
 def read_times_from_preformatted_files_directory(dirname):
+    """
+    Read times from directory containing preformatted files.
+    Supports two formats:
+    1. Old format: *-times.npy files (one time series)
+    2. New format: *.npz files with arr_0 (data) and arr_1 (times) - multiple patches
+    Returns times (list), toc (dict), data_cache (dict)
+    """
     toc = {}
-    for f in glob.glob("{}/*-times.npy".format(dirname)):
-        times = np.load(f)
+    data_cache = {}
 
-        for i, t in enumerate(times):
-            toc[t] = {"filename": f.replace("-times", ""), "index": i, "time": t}
+    time_files = glob.glob(f"{dirname}/*-times.npy")
+    if time_files:
+        for f in time_files:
+            times = np.load(f)
+            for i, t in enumerate(times):
+                toc[t] = {"filename": f.replace("-times", ""), "index": i, "time": t}
+        times = list(toc.keys())
+        times.sort()
+        print("Read {} times from {} (old format)".format(len(times), dirname))
+        return times, toc, data_cache
 
-    times = list(toc.keys())
+    npz_files = sorted(glob.glob(f"{dirname}/*.npz"))
+    if not npz_files:
+        print(f"ERROR: No NPZ files found in {dirname}")
+        return [], {}, data_cache
 
-    times.sort()
-    print("Read {} times from {}".format(len(times), dirname))
-    return times, toc
+    print("Found {} NPZ files in directory (new format - multiple patches)".format(len(npz_files)))
+    file_idx = 0
+    for npz_file in npz_files:
+        try:
+            ds = np.load(npz_file)
+            data = ds["arr_0"]
+            try:
+                data = np.clip(data, 0, 100)
+            except Exception:
+                pass
+            times = ds["arr_1"]
+            data_cache[npz_file] = data
+            for i, t in enumerate(times):
+                t_normalized = normalize_time_string(t)
+                key = (t_normalized, file_idx)
+                toc[key] = {
+                    "filename": npz_file,
+                    "index": i,
+                    "time": t_normalized,
+                    "file_idx": file_idx,
+                }
+            file_idx += 1
+            print("  Loaded {} timesteps from {} (cached in memory)".format(len(times), os.path.basename(npz_file)))
+        except Exception as e:
+            print("  Warning: Failed to load {}: {}".format(npz_file, e))
+            continue
+
+    times = sorted(list(toc.keys()), key=lambda x: (x[0], x[1]))
+    print("Total samples across all patches: {}".format(len(times)))
+    print("Unique timestamps: {}".format(len(set([t[0] for t in times]))))
+    print("Number of patches: {}".format(file_idx))
+    return times, toc, data_cache
 
 
-def read_datas_from_preformatted_files_directory(dirname, toc, times):
+def read_datas_from_preformatted_files_directory(dirname, toc, times, data_cache=None):
+    """Read data for given times from directory-based TOC, using cache when available."""
     datas = []
-
     for t in times:
         e = toc[t]
         idx = e["index"]
         filename = e["filename"]
-        datafile = np.load(filename, mmap_mode="r")
-        datas.append(datafile[idx])
-
-    return datas, times
+        if filename.endswith('.npz'):
+            if data_cache is not None and filename in data_cache:
+                arr = data_cache[filename][idx]
+            else:
+                datafile = np.load(filename, mmap_mode="r")
+                arr = datafile["arr_0"][idx]
+        else:
+            datafile = np.load(filename, mmap_mode="r")
+            arr = datafile[idx]
+        try:
+            arr = np.clip(arr, 0, 100)
+        except Exception:
+            pass
+        datas.append(arr)
+    # Return timestamps as strings
+    times_str = []
+    for t in times:
+        if isinstance(t, tuple):
+            times_str.append(t[0])
+        else:
+            times_str.append(t)
+    return datas, times_str
 
 
 def read_times_from_preformatted_file(filename):
     ds = np.load(filename)
     data = ds["arr_0"]
+    try:
+        data = np.clip(data, 0, 100)
+    except Exception:
+        pass
     times = ds["arr_1"]
-
     toc = {}
     for i, t in enumerate(times):
         toc[t] = {"index": i, "time": t}
-
     return times, data, toc
 
 
@@ -84,14 +172,6 @@ class DataSeriesGenerator:
         return len(self.placeholder) // self.batch_size
 
     def __getitem__(self, idx):
-        # placeholder X elements:
-        # 0.. n_channels: history of actual data (YYYYMMDDTHHMMSS, string)
-        # n_channels    : leadtime conditioning (0..11, int)
-        # n_channels + 1: include datetime (bool)
-        # n_channels + 2: include topography (bool)
-        # n_channels + 3: include terrain type (bool)
-        # n_channels + 4: include sun elevation angle (bool)
-
         ph = self.placeholder[idx]
 
         X = ph[0]
@@ -111,30 +191,24 @@ class DataSeriesGenerator:
 
         x = np.concatenate((x, lt), axis=0)
 
-        # Xử lý cả 2 định dạng thời gian: %Y%m%dT%H%M%S và %Y-%m-%dT%H%M
-        try:
-            # Định dạng cũ: %Y%m%dT%H%M%S
-            ts = datetime.strptime(xtimes[-1], "%Y%m%dT%H%M%S")
-        except ValueError:
-            try:
-                # Định dạng mới: %Y-%m-%dT%H%M
-                ts = datetime.strptime(xtimes[-1], "%Y-%m-%dT%H%M")
-            except ValueError:
-                print(f"Không thể phân tích định dạng thời gian: {xtimes[-1]}")
-                raise
-                
-        # Sử dụng khoảng thời gian 10 phút thay vì 15 phút
-        y_time = ts + timedelta(minutes=(1 + lc) * 10)
-
-        # Đã loại bỏ các tính năng không cần thiết (datetime, topography, terrain_type, sun_elevation_angle)
+        # Compute y_time preferring ground-truth timestamp when present
+        base_stride = int(getattr(self, "sequence_stride_minutes", 10) or 10)
+        if isinstance(ytimes, (list, tuple)) and len(ytimes) > 0:
+            y_last = normalize_time_string(ytimes[0])
+            y_time = datetime.strptime(y_last, "%Y%m%dT%H%M%S")
+        else:
+            xt_last = normalize_time_string(xtimes[-1])
+            ts = datetime.strptime(xt_last, "%Y%m%dT%H%M%S")
+            y_time = ts + timedelta(minutes=(1 + lc) * base_stride)
 
         x = np.squeeze(np.swapaxes(x, 0, 3))
 
         if self.operating_mode in (OpMode.VERIFY, OpMode.INFER):
+            xt_norm = list(map(normalize_time_string, xtimes))
             return (
                 x,
                 y,
-                np.append(xtimes, y_time.strftime("%Y%m%dT%H%M%S")),
+                np.append(xt_norm, y_time.strftime("%Y%m%dT%H%M%S")),
             )
         else:
             return (x, y)
@@ -153,16 +227,13 @@ class DataSeriesGenerator:
 
         elif self.dataseries_directory is not None:
             x, xtimes = read_datas_from_preformatted_files_directory(
-                self.dataseries_directory, self.toc, x_elems
+                self.dataseries_directory, self.toc, x_elems, self.data_cache
             )
             y, ytimes = read_datas_from_preformatted_files_directory(
-                self.dataseries_directory, self.toc, y_elems
+                self.dataseries_directory, self.toc, y_elems, self.data_cache
             )
 
         else:
-            # Xử lý dữ liệu .npz
-            print("Đang xử lý dữ liệu .npz từ thư mục {}".format(DATA_DIR))
-            # Tải dữ liệu từ tệp .npz
             x = []
             for elem in x_elems:
                 file_path = os.path.join(DATA_DIR, elem + ".npz")
@@ -221,6 +292,9 @@ class LazyDataSeries:
         operating_mode = kwargs.get("operating_mode", "TRAIN")
 
         self.cache = kwargs.get("enable_cache", False)
+        # Optional stride filtering
+        self.sequence_stride_minutes = kwargs.get("sequence_stride_minutes", None)
+        self.sequence_offset_minutes = kwargs.get("sequence_offset_minutes", 0)
 
         if operating_mode == "TRAIN":
             self.operating_mode = OpMode.TRAIN
@@ -263,10 +337,6 @@ class LazyDataSeries:
         self.initialize()
 
     def initialize(self):
-        # Read static datas, so that each dataset generator
-        # does not have to read them
-
-        # Chỉ giữ lại leadtime_conditioning
         if self.leadtime_conditioning > 0:
             leadtimes = np.asarray(
                 [
@@ -278,15 +348,14 @@ class LazyDataSeries:
             )
             self.leadtimes = np.squeeze(leadtimes, 1)
 
-        # create placeholder data
-
         if self.dataseries_file is not None:
             self.elements, self.data, self.toc = read_times_from_preformatted_file(
                 self.dataseries_file
             )
+            self.data_cache = None
 
         elif self.dataseries_directory is not None:
-            self.elements, self.toc = read_times_from_preformatted_files_directory(
+            self.elements, self.toc, self.data_cache = read_times_from_preformatted_files_directory(
                 self.dataseries_directory
             )
 
@@ -294,11 +363,33 @@ class LazyDataSeries:
             if self.filenames is not None:
                 self.elements = self.filenames
             else:
-                # Sử dụng get_npy_files thay vì read_filenames
                 self.elements = get_npy_files(DATA_DIR, "*.npz")
-                # Trích xuất tên tệp không có đuôi .npz
                 self.elements = [os.path.basename(f).replace('.npz', '') for f in self.elements]
             self.elements.sort()
+            self.data_cache = None
+
+        # Optional filtering by stride minutes and offset
+        if self.sequence_stride_minutes is not None:
+            stride = int(self.sequence_stride_minutes)
+            offset = int(self.sequence_offset_minutes) % stride
+
+            def _get_time_str(elem):
+                return elem[0] if isinstance(elem, tuple) else elem
+
+            filtered = []
+            for elem in self.elements:
+                t = normalize_time_string(_get_time_str(elem))
+                try:
+                    mm = int(t[11:13])
+                except Exception:
+                    filtered.append(elem)
+                    continue
+                if (mm % stride) == offset:
+                    filtered.append(elem)
+            removed = len(self.elements) - len(filtered)
+            if removed > 0:
+                print("Filtered {} elements by stride {} min with offset {} min".format(removed, stride, offset))
+            self.elements = filtered
 
         i = 0
 
@@ -315,19 +406,17 @@ class LazyDataSeries:
         while i <= len(self.elements) - (self.n_channels + n_fut):
             x = list(self.elements[i : i + self.n_channels])
 
-            # if we are making predictions at full hours, skip all the data
-            # where last input data (=latest time) is not at full hour
-            if self.hourly_prediction and x[-1][-4:] != "0000":
+            last_time_str = x[-1][0] if isinstance(x[-1], tuple) else x[-1]
+            if self.hourly_prediction and last_time_str[-4:] != "0000":
                 i += step
                 continue
 
             for lt in range(self.leadtime_conditioning):
                 x_ = copy.deepcopy(x)
                 x_.append(lt)
-                # Đã loại bỏ các tính năng không cần thiết (datetime, topography, terrain_type, sun_elevation_angle)
 
                 if self.operating_mode == OpMode.INFER:
-                    y = "nan"  # datetime.strptime(self.elements[-1], '%Y%m%dT%H%M%S') + timedelta(minutes=i*15)
+                    y = "nan"
                 else:
                     y = self.elements[i + self.n_channels + lt]
 
@@ -337,11 +426,38 @@ class LazyDataSeries:
 
         assert len(self._placeholder) > 0, "Placeholder array is empty"
 
-        print(
-            "Placeholder timeseries length: {} number of samples: {}".format(
-                len(self.elements), len(self._placeholder)
+        # Stats
+        if self.dataseries_directory is not None:
+            unique_times = set()
+            unique_files = set()
+            for elem in self.elements:
+                if isinstance(elem, tuple):
+                    unique_times.add(elem[0])
+                    unique_files.add(elem[1])
+                else:
+                    unique_times.add(elem)
+            if unique_files:
+                print("=" * 70)
+                print("DATASET STATISTICS:")
+                print("=" * 70)
+                print("Number of patch files:        {}".format(len(unique_files)))
+                print("Unique timestamps per patch:  {}".format(len(unique_times)))
+                print("Total timeseries elements:    {}".format(len(self.elements)))
+                print("Training samples created:     {}".format(len(self._placeholder)))
+                print("Samples per patch (approx):   {}".format(len(self._placeholder) // max(len(unique_files), 1)))
+                print("=" * 70)
+            else:
+                print(
+                    "Placeholder timeseries length: {} number of samples: {}".format(
+                        len(self.elements), len(self._placeholder)
+                    )
+                )
+        else:
+            print(
+                "Placeholder timeseries length: {} number of samples: {}".format(
+                    len(self.elements), len(self._placeholder)
+                )
             )
-        )
 
         if self.shuffle_data:
             np.random.shuffle(self._placeholder)
@@ -352,23 +468,14 @@ class LazyDataSeries:
 
     def get_dataset(self, take_ratio=None, skip_ratio=None):
         def flip(x, y, t, n):
-            # flip first n dimensions as they contain the payload data
-            # concatenate the flipped data with the rest
             x = tf.concat([tf.image.flip_up_down(x[..., 0:n]), x[..., n:]], axis=-1)
             y = tf.image.flip_up_down(y)
             return (x, y, t)
 
         def normalize(x, y, t, n):
-            # normalize input data (x) to 0..1
-            # scale output data to 0..1
-            # mean, variance = tf.nn.moments(x, axes=[0, 1], keepdims=True)
-            # x = (x - mean) / tf.sqrt(variance + tf.keras.backend.epsilon())
-
             if tf.math.reduce_max(x[..., 0]) <= 1.01:
                 return (x, y, t)
 
-            # scale all data to 0..1, to preserve compatibility with older models
-            # trained with this software
             x = tf.concat([0.01 * x[..., 0:n], x[..., n:]], axis=-1)
             y = y * 0.01
             return (x, y, t)
@@ -386,7 +493,6 @@ class LazyDataSeries:
         if placeholder is None:
             placeholder = copy.deepcopy(self._placeholder)
 
-        # Chỉ giữ lại các tính năng cần thiết
         x_dim_len = self.n_channels
         x_dim_len += 1 if self.leadtime_conditioning > 0 else 0
 
@@ -412,13 +518,19 @@ class LazyDataSeries:
             and self.dataseries_directory is None
             and self.dataseries_file is None
         ):
-            dataset = dataset.map(lambda x, y, t: flip(x, y, t, self.n_channels)).map(
-                lambda x, y, t: normalize(x, y, t, self.n_channels)
+            dataset = dataset.map(
+                lambda x, y, t: flip(x, y, t, self.n_channels),
+                num_parallel_calls=AUTOTUNE
+            ).map(
+                lambda x, y, t: normalize(x, y, t, self.n_channels),
+                num_parallel_calls=AUTOTUNE
             )
 
-        dataset = dataset.batch(self.batch_size, drop_remainder=True).prefetch(AUTOTUNE)
-
-        if self.cache:
+        dataset = dataset.batch(self.batch_size, drop_remainder=True)
+        
+        if self.cache and len(placeholder) < 10000:
             dataset = dataset.cache()
+        
+        dataset = dataset.prefetch(AUTOTUNE)
 
         return dataset

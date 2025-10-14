@@ -1,3 +1,7 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_auto_jit=2 --tf_xla_min_cluster_size=4'
+
 from datetime import datetime
 from tensorflow.keras.models import save_model
 from model import *

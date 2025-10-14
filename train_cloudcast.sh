@@ -6,20 +6,8 @@
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Activate conda environment
-echo "Activating sat_rain_cast conda environment..."
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate sat_rain_cast
-
-# Verify environment is activated
-if [ -z "$CONDA_DEFAULT_ENV" ]; then
-    echo "ERROR: Failed to activate sat_rain_cast environment!"
-    echo "Available environments:"
-    conda env list
-    exit 1
-fi
-
-echo "Activated environment: $CONDA_DEFAULT_ENV"
+# Sử dụng môi trường hiện tại
+echo "Sử dụng môi trường hiện tại: $CONDA_DEFAULT_ENV"
 
 # Verify TensorFlow is available
 echo "Checking TensorFlow installation..."
@@ -199,7 +187,7 @@ echo "Log saved to: $LOG_FILE"
 # ========================================
 #
 # 1. Training với single NPZ file:
-# ./train_cloudcast.sh --dataseries_file output/single_patch.npz --label "single_patch_10min"
+# ./train_cloudcast.sh --dataseries_file data/patch000_2025-09-03_2025-10-08_patches_512512_float32.npz --label "single_patch_10min"
 #
 # 2. Training với multiple NPZ patches:
 # ./train_cloudcast.sh --dataseries_directory output/patches --label "multi_patch_10min"
