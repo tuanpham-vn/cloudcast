@@ -52,8 +52,10 @@ def parse_command_line():
     parser.add_argument("--loss_info", action="store_true", help="Hiển thị thông tin về các hàm loss và thoát")
     parser.add_argument(
         "--loss_function", action="store", type=str, default="ssim",
-        choices=["MeanSquaredError", "ssim", "msssim", "bcl1", "fss", "ks", "coss", "mae"],
-        help="Loss function to use: MeanSquaredError, ssim (Structural Similarity), msssim (Multi-Scale SSIM), bcl1 (Binary Cross-Entropy + L1), fss (Fractions Skill Score), ks (Kolmogorov-Smirnov), coss (Cosine Similarity), mae (Mean Absolute Error)"
+        help=(
+            "Loss function: MeanSquaredError | ssim | msssim | bcl1 | fss | ks | coss | mae | "
+            "ssim_mae[_wSSIM_wMAE] (e.g., ssim_mae or ssim_mae_0.5_0.5)"
+        )
     )
     parser.add_argument(
         "--preprocess", action="store", type=str, default="img_size=512x512"
@@ -232,7 +234,9 @@ def run_model(args, opts):
 
     # Hiển thị thông tin về hàm loss được sử dụng
     print(f"\nSử dụng hàm loss: {args.loss_function}")
-    if args.loss_function.startswith("ssim"):
+    if args.loss_function.startswith("ssim_mae"):
+        print("Combined Loss: SSIM + MAE with configurable weights (default 0.5/0.5)")
+    elif args.loss_function.startswith("ssim"):
         print("Structural Similarity Index Loss - Đánh giá độ tương đồng về cấu trúc giữa ảnh")
     elif args.loss_function.startswith("msssim"):
         print("Multi-Scale SSIM Loss - Phiên bản đa tỷ lệ của SSIM")

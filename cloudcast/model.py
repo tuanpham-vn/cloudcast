@@ -65,6 +65,30 @@ print(
 
 
 def get_loss_function(loss_function):
+    # Combined losses
+    if loss_function.startswith("ssim_mae"):
+        # Syntax options:
+        #  - "ssim_mae" -> defaults to weights 0.5, 0.5
+        #  - "ssim_mae_w1_w2" -> e.g. ssim_mae_0.7_0.3
+        parts = loss_function.split("_")
+        if len(parts) == 3:
+            try:
+                w_ssim = float(parts[1])
+                w_mae = float(parts[2])
+            except Exception:
+                w_ssim, w_mae = 0.5, 0.5
+        else:
+            w_ssim, w_mae = 0.5, 0.5
+
+        ssim_loss = make_SSIM_loss()
+        mae_loss = make_MAE_loss()
+
+        def combined_loss(y_true, y_pred):
+            return w_ssim * ssim_loss(y_true, y_pred) + w_mae * mae_loss(y_true, y_pred)
+
+        combined_loss.__name__ = f"SSIM_MAE_combined_{w_ssim}_{w_mae}"
+        return combined_loss
+
     if loss_function.startswith("ssim"):
         values = loss_function.split("_")
         if len(values) == 1:
