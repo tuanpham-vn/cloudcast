@@ -22,7 +22,7 @@ def make_SSIM_loss(mask_size=11, mask_sigma=1.5, k1=0.01, k2=0.03):
             )
         )  # define data range as 1.0
 
-    SSIM_loss.__name__ = "SSIM_mask_size-{}".format(mask_size)
+    SSIM_loss.__name__ = "SSIM"
 
     return SSIM_loss
 
@@ -42,6 +42,6 @@ def make_MS_SSIM_loss(mask_size=11, mask_sigma=1.5, k1=0.01, k2=0.03):
             )
         )
 
-    MS_SSIM_loss.__name__ = "MS_SSIM_mask_size-{}".format(mask_size)
+    MS_SSIM_loss.__name__ = "MS_SSIM"
 
     return MS_SSIM_loss

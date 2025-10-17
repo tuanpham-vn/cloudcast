@@ -74,7 +74,9 @@ def parse_command_line():
     parser.add_argument("--checkpoint_path", action="store", type=str, default=None,
                       help="Đường dẫn weights để fine-tune (mặc định dùng 1e-5 nếu không chỉ định learning rate)")
     parser.add_argument("--no_mixed_precision", action="store_true", default=False,
-                      help="Disable mixed precision (enabled by default if GPUs available)")
+                      help="Disable mixed precision training (default: enabled if GPUs available)")
+    parser.add_argument("--force_load_weights", action="store_true", default=False,
+                      help="Force load weights even if there are warnings (for fine-tuning)")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--start_date", action="store", type=str)
@@ -122,9 +124,9 @@ class NumpyEncoder(json.JSONEncoder):
 
 def get_batch_size(img_size):
     if img_size[0] >= 512:
-        batch_size = 16  # Độ phân giải cao 512x512 cần giảm batch size để tiết kiệm bộ nhớ
+        batch_size = 6
     elif img_size[0] >= 384:
-        batch_size = 16
+        batch_size = 8
     elif img_size[0] >= 256:
         batch_size = 16
     elif img_size[0] >= 224:
@@ -289,14 +291,19 @@ def run_model(args, opts):
         else:
             print("No GPU detected, using CPU")
 
-    # Enable mixed precision by default when GPUs are available
-    if len(gpus) > 0 and not args.no_mixed_precision:
+    # Enable mixed precision based on arguments
+    # Default: enable mixed precision if GPUs are available, unless explicitly disabled
+    enable_mixed_precision = len(gpus) > 0 and not args.no_mixed_precision
+    
+    if enable_mixed_precision:
         try:
             from tensorflow.keras import mixed_precision
             mixed_precision.set_global_policy('mixed_float16')
             print("Mixed precision enabled (mixed_float16)")
         except Exception as e:
             print(f"Could not enable mixed precision: {e}")
+    else:
+        print("Mixed precision disabled")
 
     # For fine-tuning, try to detect loss function from checkpoint path BEFORE building model
     if args.checkpoint_path and "ssim_mae" in args.checkpoint_path:
@@ -320,6 +327,7 @@ def run_model(args, opts):
             input_size=img_size + (n_channels,),
             loss_function=args.loss_function,
             optimizer=optimizer,
+            force_load_weights=args.force_load_weights,
         )
 
     start = datetime.datetime.now()

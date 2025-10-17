@@ -49,15 +49,16 @@ mkdir -p logs
 # Default parameters
 LOSS_FUNCTION="bcl1"
 N_CHANNELS=4
-LEADTIME_CONDITIONING=18  # Đã tăng từ 12 lên 18 để phù hợp với khoảng thời gian 10 phút
-IMG_SIZE="512x512"        # Đã thay đổi từ 128x128 lên 512x512
+LEADTIME_CONDITIONING=18
+IMG_SIZE="512x512"
 DATASERIES_FILE=""
-DATASERIES_DIRECTORY="data"
+DATASERIES_DIRECTORY="output/"
 LABEL=""
-SEQUENCE_STRIDE_MINUTES=10  # Đã thay đổi từ 20 phút xuống 10 phút
+SEQUENCE_STRIDE_MINUTES=10
 SEQUENCE_OFFSET_MINUTES=0
 CHECKPOINT_PATH=""
-LEARNING_RATE="0.0005"
+LEARNING_RATE="0.001"
+MIXED_PRECISION=true  # Mặc định bật mixed precision
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -102,6 +103,14 @@ while [[ $# -gt 0 ]]; do
             LEARNING_RATE="$2"
             shift 2
             ;;
+        --no_mixed_precision)
+            MIXED_PRECISION=false
+            shift
+            ;;
+        --force_load_weights)
+            FORCE_LOAD_WEIGHTS=true
+            shift
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo "Options:"
@@ -115,6 +124,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --sequence_offset_minutes N Sequence offset in minutes (default: $SEQUENCE_OFFSET_MINUTES)"
             echo "  --checkpoint_path PATH      Path to checkpoint for fine-tuning"
             echo "  --learning_rate LR          Learning rate (default: 1e-3 for training, 5e-4 for fine-tuning)"
+            echo "  --no_mixed_precision        Disable mixed precision training (default: enabled if GPUs available)"
+            echo "  --force_load_weights        Force load weights even with warnings (for fine-tuning)"
             echo "  --help                      Show this help"
             exit 0
             ;;
@@ -207,6 +218,8 @@ python cloudcast/cloudcast-unet.py \
   --sequence_stride_minutes "$SEQUENCE_STRIDE_MINUTES" \
   --sequence_offset_minutes "$SEQUENCE_OFFSET_MINUTES" \
   ${CHECKPOINT_PATH:+--checkpoint_path "$CHECKPOINT_PATH"} \
+  $([ "$MIXED_PRECISION" = "false" ] && echo "--no_mixed_precision") \
+  ${FORCE_LOAD_WEIGHTS:+--force_load_weights} \
   $DATA_ARG \
   $OPTIONAL_ARGS 2>&1 | tee "$LOG_FILE"
 
@@ -220,8 +233,8 @@ echo "Log saved to: $LOG_FILE"
 #
 # 0. Training với loss SSIM + MAE (50%/50% mặc định):
 # bash train_cloudcast.sh \
-#   --dataseries_directory data \
-#   --label ssim_mae_50_50 \
+#   --dataseries_directory input \
+#   --label ssim_mae_70_30 \
 #   --loss_function ssim_mae
 #   # Lưu ý: thiết lập loss trong Python bằng tham số --loss_function ssim_mae khi gọi trực tiếp
 #
@@ -240,10 +253,10 @@ echo "Log saved to: $LOG_FILE"
 #
 # 0c. Training với SSIM + MAE trọng số 70%/30%:
 # # Dùng trực tiếp python để truyền loss:
-# # python cloudcast/cloudcast-unet.py \
-# #   --dataseries_directory data \
-# #   --label ssim_mae_70_30 \
-# #   --loss_function ssim_mae_0.7_0.3
+#    bash train_cloudcast.sh \
+#    --dataseries_directory  /home/databourg/workspace/cloudcast/output\
+#    --label ssim_mae_70_30 \
+#    --loss_function ssim_mae_0.7_0.3
 #
 # 1. Training với single NPZ file:
 # ./train_cloudcast.sh --dataseries_file data/patch000_2025-09-03_2025-10-08_patches_512512_float32.npz --label "single_patch_10min"
@@ -299,3 +312,13 @@ echo "Log saved to: $LOG_FILE"
 #   --label "finetuned_model" \
 #   --checkpoint_path models/original_model/variables/variables
 #
+
+
+'''
+bash train_cloudcast.sh \
+--label "multi_patch_10min" \
+--loss_function ssim_mae_0.7_0.3 \
+--checkpoint_path '/home/databourg/workspace/cloudcast2/checkpoints/unet-ssim_mae_0.8_0.2-hist=4-lc=18-oh=False-img_size=512x512/model.weights.h5' \
+--dataseries_directory '/home/databourg/workspace/cloudcast/output_test'
+
+'''

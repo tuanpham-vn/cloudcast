@@ -161,6 +161,6 @@ def make_FSS_loss(
 
         return tf.cast(loss, dtype=tf.float32)
 
-    my_FSS_loss.__name__ = "FSS_mask_size-{}".format(mask_size)
+    my_FSS_loss.__name__ = "FSS"
 
     return run_loss

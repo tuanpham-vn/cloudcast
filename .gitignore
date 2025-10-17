@@ -4,3 +4,7 @@ models
 *.log
 /data
 /predictions
+/tiff_files
+/training_visualizations
+/rainfall_analysis
+/rainfall_analysis_results

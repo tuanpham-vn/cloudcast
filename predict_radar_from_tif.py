@@ -24,30 +24,30 @@ def parse_command_line():
     
     parser.add_argument("--patch_size", action="store", type=int, default=512,
                        help="Patch size for sliding window (default: 512)")
-    parser.add_argument("--overlap_ratio", action="store", type=float, default=0.1,
-                       help="Overlap ratio between patches (default: 0.1)")
-    parser.add_argument("--center_crop_ratio", action="store", type=float, default=0.6,
+    parser.add_argument("--overlap_ratio", action="store", type=float, default=0.5,
+                       help="Overlap ratio between patches (default: 0.5)")
+    parser.add_argument("--center_crop_ratio", action="store", type=float, default=0.5,
                        help="Center crop ratio for output patches (default: 0.6, range: 0.0-1.0)")
     parser.add_argument("--n_forecast", action="store", type=int, default=18,
                        help="Number of forecast frames (default: 18)")
-    parser.add_argument("--n_channels", action="store", type=int, default=None,
+    parser.add_argument("--n_channels", action="store", type=int, default=4,
                        help="Number of input data channels (without leadtime conditioning)")
     parser.add_argument("--leadtime_conditioning", action="store", type=int, default=18,
                        help="Leadtime conditioning depth (default: 18)")
-    parser.add_argument("--batch_size", action="store", type=int, default=32,
-                       help="Batch size for prediction (default: 32)")
+    parser.add_argument("--batch_size", action="store", type=int, default=16,
+                       help="Batch size for prediction (default: 8)")
     parser.add_argument("--create_colored_tif", action="store_true",
                        help="Create colored TIF files (default: False)")
-    parser.add_argument("--create_png", action="store_true",
+    parser.add_argument("--create_png", action="store_true", default=True,
                        help="Create PNG files from predictions (default: False)")
     parser.add_argument("--show_progress", action="store_true",
                        help="Show progress during processing")
-    parser.add_argument("--sequence_stride_minutes", action="store", type=int, default=20,
+    parser.add_argument("--sequence_stride_minutes", action="store", type=int, default=10,
                        help="Stride in minutes between predictions (default: 20, use 10 for 10-minute models)")
     parser.add_argument("--force_n_channels", action="store", type=int, default=None,
                        help="Force specific TOTAL number of channels including leadtime (to fix tensor shape mismatch)")
     parser.add_argument("--clip_values", action="store_true", default=True,
-                       help="Clip input and output values to [0, 100] range (default: True)")
+                       help="Clip input values to [0, 100] range before normalization (default: True)")
     
     args = parser.parse_args()
     return args
@@ -96,7 +96,7 @@ def read_tif_file(filepath: str, clip_values: bool = True) -> np.ndarray:
     
     Args:
         filepath: Path to TIF file
-        clip_values: Whether to clip values to [0, 100] range
+        clip_values: Whether to clip values to [0, 100] range before normalization
         
     Returns:
         Normalized array with values in [0, 1] range
@@ -105,15 +105,15 @@ def read_tif_file(filepath: str, clip_values: bool = True) -> np.ndarray:
         with Image.open(filepath) as img:
             if img.mode != 'L':
                 img = img.convert('L')
-            data = np.array(img, dtype=np.float32) / 255.0
+            # Read data directly as float32
+            data = np.array(img, dtype=np.float32)
             
-            # Scale to [0, 100] range and clip if requested
-            data = data * 100.0
+            # Clip values to [0, 100] range if requested
             if clip_values:
                 data = np.clip(data, 0, 100)
-                
-            # Normalize back to [0, 1] for model input
-            data = data / 100.0
+            
+            # Normalize to [0, 1] range by multiplying with 0.01
+            data = data * 0.01
             
             return data
     except Exception as e:
@@ -178,7 +178,7 @@ def load_and_extract_patches(tif_files: List[str], patch_size: int,
         tif_files: List of TIF file paths
         patch_size: Size of each patch
         overlap_ratio: Overlap ratio between patches
-        clip_values: Whether to clip values to [0, 100] range
+        clip_values: Whether to clip values to [0, 100] range before normalization
     
     Returns:
         patch_sequences: List of (n_input, H, W, 1) arrays
@@ -378,7 +378,7 @@ def predict_with_model(model_path: str, patches: List[np.ndarray],
         show_progress: Show progress bar
         sequence_stride_minutes: Stride in minutes between predictions (10 or 20)
         force_n_channels: Force specific number of channels when loading model
-        clip_values: Whether to clip values to [0, 100] range
+        clip_values: Whether to clip values to [0, 1] range (already normalized)
     
     Returns:
         List of predictions (n_forecast, H, W, 1)
@@ -460,10 +460,7 @@ def predict_with_model(model_path: str, patches: List[np.ndarray],
             batch_array = np.array(batch_inputs)
             batch_preds = model.predict(batch_array, verbose=0)
             
-            # Clip predictions to [0, 100] range if requested
-            if clip_values:
-                batch_preds = np.clip(batch_preds * 100.0, 0, 100) / 100.0
-            
+            # Keep original model output values without any clipping or normalization
             for pred in batch_preds:
                 leadtime_predictions.append(pred)
             
@@ -555,14 +552,14 @@ def save_predictions(outputs: List[np.ndarray], output_dir: str,
                     base_timestamp: str, sequence_stride_minutes: int = 10,
                     clip_values: bool = True):
     """
-    Save predictions as TIF files
+    Save predictions as TIF files (multiply by 100 for visualization)
     
     Args:
         outputs: List of prediction frames
         output_dir: Output directory
         base_timestamp: Base timestamp string
         sequence_stride_minutes: Stride in minutes between predictions
-        clip_values: Whether to clip values to [0, 100] range
+        clip_values: Whether to clip values (kept for compatibility, but no longer used)
     """
     os.makedirs(output_dir, exist_ok=True)
     
@@ -579,16 +576,13 @@ def save_predictions(outputs: List[np.ndarray], output_dir: str,
         filename = f"radar_{timestamp_out}_pred.tif"
         filepath = os.path.join(output_dir, filename)
         
-        # Clip values if requested (already normalized to 0-1 range)
-        if clip_values:
-            frame = np.clip(frame, 0, 1)
-            
-        # Convert to 8-bit image and save
-        img = Image.fromarray((frame * 255).astype(np.uint8), mode='L')
+        # Multiply by 100 for visualization (model output * 100)
+        frame_100 = frame * 100.0
+        img = Image.fromarray(frame_100.astype(np.float32), mode='F')
         img.save(filepath)
         
         output_files.append(filepath)
-        print(f"  ✓ {filename} | range=[{frame.min():.4f}, {frame.max():.4f}]")
+        print(f"  ✓ {filename} | range=[{frame.min():.4f}, {frame.max():.4f}] (model) | range=[{frame_100.min():.2f}, {frame_100.max():.2f}] (x100)")
     
     return output_files
 
@@ -596,10 +590,10 @@ def save_predictions(outputs: List[np.ndarray], output_dir: str,
 def create_colored_tif(grayscale_tif_path: str, output_dir: str, 
                       timestamp_str: str) -> str:
     """
-    Create colored TIF from grayscale TIF
+    Create colored TIF from grayscale TIF (data already multiplied by 100)
     
     Args:
-        grayscale_tif_path: Path to grayscale TIF
+        grayscale_tif_path: Path to grayscale TIF (already x100)
         output_dir: Output directory for colored TIF
         timestamp_str: Timestamp string for filename
     
@@ -612,11 +606,17 @@ def create_colored_tif(grayscale_tif_path: str, output_dir: str,
     os.makedirs(colored_dir, exist_ok=True)
     
     img = Image.open(grayscale_tif_path)
-    data = np.array(img, dtype=np.float32) / 255.0
+    # Data is already in [0, 100] range (model output * 100)
+    data = np.array(img, dtype=np.float32)
+    
+    # Ensure data is properly clipped to [0, 100] range
+    data_clipped = np.clip(data, 0, 100)
     
     cmap, norm, boundaries = create_cloud_colormap()
-    colored_data = apply_cloud_colors(data, cmap, norm, normalize=True)
+    # Apply colors using data in [0, 100] range (no normalization needed)
+    colored_data = apply_cloud_colors(data_clipped, cmap, norm, normalize=False)
     
+    # Convert to uint8 for colored TIF (RGBA format)
     colored_data_uint8 = (colored_data * 255).astype(np.uint8)
     colored_img = Image.fromarray(colored_data_uint8, mode='RGBA')
     
@@ -630,10 +630,10 @@ def create_colored_tif(grayscale_tif_path: str, output_dir: str,
 def create_png_from_tif(tif_path: str, output_dir: str, 
                        timestamp_str: str, is_colored: bool = False) -> str:
     """
-    Create PNG from TIF file
+    Create PNG from TIF file (data already multiplied by 100)
     
     Args:
-        tif_path: Path to TIF file (grayscale or colored)
+        tif_path: Path to TIF file (grayscale or colored, already x100)
         output_dir: Output directory for PNG
         timestamp_str: Timestamp string for filename
         is_colored: Whether input is colored TIF
@@ -650,16 +650,20 @@ def create_png_from_tif(tif_path: str, output_dir: str,
     os.makedirs(png_dir, exist_ok=True)
     
     img = Image.open(tif_path)
-    data = np.array(img)
+    data = np.array(img, dtype=np.float32)
     
     fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
     
     if is_colored:
         ax.imshow(data)
     else:
-        data_normalized = data.astype(np.float32) / 255.0
+        # Data is already in [0, 100] range (model output * 100)
+        # No need to divide by 255 since data is already in correct range
+        data_clipped = np.clip(data, 0, 100)
+        
         cmap, norm, boundaries = create_cloud_colormap()
-        colored_data = apply_cloud_colors(data_normalized, cmap, norm, normalize=True)
+        # Use clipped data and don't normalize (data is already in correct range)
+        colored_data = apply_cloud_colors(data_clipped, cmap, norm, normalize=False)
         ax.imshow(colored_data)
     
     ax.axis('off')
@@ -672,7 +676,6 @@ def create_png_from_tif(tif_path: str, output_dir: str,
     plt.close(fig)
     
     return output_path
-
 
 def create_visualization_outputs(tif_files: List[str], output_dir: str,
                                 create_colored: bool = False, 
@@ -762,7 +765,7 @@ def main():
     print(f"Sequence stride:       {args.sequence_stride_minutes} minutes")
     if args.force_n_channels:
         print(f"Force total channels:  {args.force_n_channels} (data={n_data_channels} + leadtime=1)")
-    print(f"Clip values:           {'Yes' if args.clip_values else 'No'}")
+    print(f"Clip values:           {'Yes' if args.clip_values else 'No'} (input normalization, output x100 for visualization)")
     print("="*80)
     
     try:

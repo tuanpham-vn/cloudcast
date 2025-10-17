@@ -70,11 +70,7 @@ def read_times_from_preformatted_files_directory(dirname):
     for npz_file in npz_files:
         try:
             ds = np.load(npz_file)
-            data = ds["arr_0"]
-            try:
-                data = np.clip(data, 0, 100)
-            except Exception:
-                pass
+            data = ds["arr_0"]  # Data already clipped to [0, 100] in create_tiff_dataset.py
             times = ds["arr_1"]
             data_cache[npz_file] = data
             for i, t in enumerate(times):
@@ -114,11 +110,7 @@ def read_datas_from_preformatted_files_directory(dirname, toc, times, data_cache
                 arr = datafile["arr_0"][idx]
         else:
             datafile = np.load(filename, mmap_mode="r")
-            arr = datafile[idx]
-        try:
-            arr = np.clip(arr, 0, 100)
-        except Exception:
-            pass
+            arr = datafile[idx]  # Data already clipped to [0, 100] in create_tiff_dataset.py
         datas.append(arr)
     # Return timestamps as strings
     times_str = []
@@ -132,11 +124,7 @@ def read_datas_from_preformatted_files_directory(dirname, toc, times, data_cache
 
 def read_times_from_preformatted_file(filename):
     ds = np.load(filename)
-    data = ds["arr_0"]
-    try:
-        data = np.clip(data, 0, 100)
-    except Exception:
-        pass
+    data = ds["arr_0"]  # Data already clipped to [0, 100] in create_tiff_dataset.py
     times = ds["arr_1"]
     toc = {}
     for i, t in enumerate(times):
@@ -510,12 +498,15 @@ class LazyDataSeries:
             return (x, y, t)
 
         def normalize(x, y, t, n):
-            if tf.math.reduce_max(x[..., 0]) <= 1.01:
-                return (x, y, t)
-
+            # Data is already clipped to [0, 100] in create_tiff_dataset.py
+            # Normalize to [0, 1] by multiplying by 0.01 for all operating modes
+            # This ensures consistent data range between training and inference
             x = tf.concat([0.01 * x[..., 0:n], x[..., n:]], axis=-1)
             y = y * 0.01
-            return (x, y, t)
+            if t is not None:
+                return (x, y, t)
+            else:
+                return (x, y)
 
         placeholder = None
 
@@ -550,6 +541,21 @@ class LazyDataSeries:
         gen = DataSeriesGenerator(placeholder=placeholder, **self.__dict__)
         dataset = tf.data.Dataset.from_generator(gen, output_signature=sig)
 
+        # Apply normalization for all operating modes to ensure consistent data range [0,1]
+        if self.operating_mode == OpMode.TRAIN:
+            # For training mode: only (x, y) are returned
+            dataset = dataset.map(
+                lambda x, y: normalize(x, y, None, self.n_channels),
+                num_parallel_calls=AUTOTUNE
+            )
+        else:
+            # For inference/verify modes: (x, y, t) are returned
+            dataset = dataset.map(
+                lambda x, y, t: normalize(x, y, t, self.n_channels),
+                num_parallel_calls=AUTOTUNE
+            )
+        
+        # Apply data augmentation (flip) only for non-training modes when using old data format
         if (
             self.operating_mode != OpMode.TRAIN
             and self.dataseries_directory is None
@@ -557,9 +563,6 @@ class LazyDataSeries:
         ):
             dataset = dataset.map(
                 lambda x, y, t: flip(x, y, t, self.n_channels),
-                num_parallel_calls=AUTOTUNE
-            ).map(
-                lambda x, y, t: normalize(x, y, t, self.n_channels),
                 num_parallel_calls=AUTOTUNE
             )
 

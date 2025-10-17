@@ -1,0 +1,3 @@
+# Requirements for visualize_npz_data_training.py
+numpy>=1.21.0
+matplotlib>=3.3.0

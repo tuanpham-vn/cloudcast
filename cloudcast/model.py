@@ -168,7 +168,8 @@ def unet(
     loss_function="MeanSquaredError",
     optimizer="adam",
     n_categories=None,
-    compile=True
+    compile=True,
+    force_load_weights=False
 ):
     inputs = Input(input_size)
 
@@ -245,12 +246,37 @@ def unet(
         )
 
     if pretrained_weights is not None:
-        try:
-            # Try loading weights only (skip optimizer state)
-            model.load_weights(pretrained_weights, by_name=True, skip_mismatch=True)
-            print(f"Successfully loaded weights from {pretrained_weights}")
-        except Exception as e:
-            print(f"Warning: Could not load weights from {pretrained_weights}: {e}")
-            print("Continuing with random weights...")
+        weights_loaded = False
+        
+        # Try different loading methods
+        loading_methods = [
+            # Method 1: Load with by_name=True (for legacy H5 files)
+            lambda: model.load_weights(pretrained_weights, by_name=True, skip_mismatch=True),
+            # Method 2: Load without by_name (for newer H5 files)
+            lambda: model.load_weights(pretrained_weights, skip_mismatch=True),
+            # Method 3: Load with by_name=False (strict loading)
+            lambda: model.load_weights(pretrained_weights, by_name=False, skip_mismatch=True),
+        ]
+        
+        for i, load_method in enumerate(loading_methods, 1):
+            try:
+                load_method()
+                print(f"Successfully loaded weights from {pretrained_weights} (method {i})")
+                weights_loaded = True
+                break
+            except Exception as e:
+                if i == len(loading_methods):  # Last method failed
+                    if force_load_weights:
+                        print(f"Warning: Could not load weights from {pretrained_weights}: {e}")
+                        print("Force loading enabled - continuing with partial weights...")
+                        weights_loaded = True  # Force continue even with warnings
+                    else:
+                        print(f"Warning: Could not load weights from {pretrained_weights}: {e}")
+                        print("Continuing with random weights...")
+                else:
+                    print(f"Method {i} failed: {e}, trying next method...")
+        
+        if not weights_loaded and not force_load_weights:
+            print("All loading methods failed. Continuing with random weights...")
 
     return model
