@@ -46,11 +46,12 @@ def create_cloud_colormap():
     
     # Set the boundaries for the colormap
     boundaries = thresholds + [float('inf')]  # Add infinity for the last color
-    norm = plt.Normalize(vmin=0, vmax=150)  # Set the range
+    # Adjust normalization range to better match actual data range [0, 60]
+    norm = plt.Normalize(vmin=0, vmax=100)  # Set the range to match typical radar data
     
     return cmap, norm, boundaries
 
-def normalize_to_cloud_range(image, target_min=1.0, target_max=100.0):
+def normalize_to_cloud_range(image, target_min=0.0, target_max=100.0):
     """Normalize image data to cloud range (1-100 mm)"""
     # Get current data range
     current_min = image.min()
@@ -70,9 +71,9 @@ def normalize_to_cloud_range(image, target_min=1.0, target_max=100.0):
 
 def apply_cloud_colors(image, cmap, norm, normalize=True):
     """Apply cloud colors to an image"""
-    # Normalize the image to cloud range (1-100 mm) if requested
+    # Normalize the image to cloud range (0-100 mm) if requested
     if normalize:
-        image = normalize_to_cloud_range(image, target_min=1.0, target_max=100.0)
+        image = normalize_to_cloud_range(image, target_min=0.0, target_max=100.0)
     
     # Apply the colormap
     colored_image = cmap(norm(image))

@@ -32,13 +32,13 @@ def parse_command_line():
                        help="Number of forecast frames (default: 18)")
     parser.add_argument("--n_channels", action="store", type=int, default=4,
                        help="Number of input data channels (without leadtime conditioning)")
-    parser.add_argument("--leadtime_conditioning", action="store", type=int, default=18,
+    parser.add_argument("--leadtime_conditioning", action="store", type=int, default=10,
                        help="Leadtime conditioning depth (default: 18)")
     parser.add_argument("--batch_size", action="store", type=int, default=16,
                        help="Batch size for prediction (default: 8)")
     parser.add_argument("--create_colored_tif", action="store_true",
                        help="Create colored TIF files (default: False)")
-    parser.add_argument("--create_png", action="store_true", default=True,
+    parser.add_argument("--create_png", action="store_true", default=False,
                        help="Create PNG files from predictions (default: False)")
     parser.add_argument("--show_progress", action="store_true",
                        help="Show progress during processing")

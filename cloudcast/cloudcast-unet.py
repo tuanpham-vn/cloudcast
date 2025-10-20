@@ -189,7 +189,7 @@ def callbacks(args, opts):
         save_best_only=True,
     )
     early_stopping_cb = keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=7, min_delta=0.0005, verbose=1
+        monitor="val_loss", patience=11, min_delta=0.0001, verbose=1
     )
     reduce_lr_cb = keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=5)
     term_nan = keras.callbacks.TerminateOnNaN()

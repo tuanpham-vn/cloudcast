@@ -20,9 +20,9 @@ def parse_command_line():
                        help="Directory containing grayscale TIF files")
     parser.add_argument("--output_dir", action="store", type=str, default=None,
                        help="Output directory (default: same as input_dir)")
-    parser.add_argument("--pattern", action="store", type=str, default="*_pred.tif",
+    parser.add_argument("--pattern", action="store", type=str, default="*.tif",
                        help="File pattern to match (default: *_pred.tif)")
-    parser.add_argument("--create_colored_tif", action="store_true", default=True,
+    parser.add_argument("--create_colored_tif", action="store_true", default=False,
                        help="Create colored TIF files (default: True)")
     parser.add_argument("--create_png", action="store_true", default=True,
                        help="Create PNG files (default: True)")

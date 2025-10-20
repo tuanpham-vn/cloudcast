@@ -154,6 +154,25 @@ def get_combined_metrics():
     mae_metric = make_MAE_loss()
     return [ssim_metric, mae_metric]
 
+def get_metrics_for_loss(loss_function):
+    """Get appropriate metrics based on loss function"""
+    if loss_function.startswith("ssim_mae"):
+        return get_combined_metrics()
+    elif loss_function.startswith("msssim"):
+        msssim_metric = make_MS_SSIM_loss()
+        return [msssim_metric]
+    elif loss_function.startswith("ssim"):
+        ssim_metric = make_SSIM_loss()
+        return [ssim_metric]
+    elif loss_function == "bcl1":
+        bcl1_metric = make_bc_l1_loss()
+        return [bcl1_metric]
+    elif loss_function == "mae":
+        mae_metric = make_MAE_loss()
+        return [mae_metric]
+    else:
+        return get_metrics()
+
 def get_all_metrics():
     """Get all available metrics for comparison during fine-tuning"""
     ssim_metric = make_SSIM_loss()
@@ -226,7 +245,7 @@ def unet(
     model = Model(inputs, outputs)
 
     if compile:
-        # Choose metrics: if SSIM-based loss is used, also report SSIM and MAE metrics
+        # Choose metrics based on loss function
         metrics = get_metrics()
         try:
             lf_name = loss_function if isinstance(loss_function, str) else ""
@@ -236,8 +255,10 @@ def unet(
             lf_name.startswith("ssim")
             or lf_name.startswith("msssim")
             or lf_name.startswith("ssim_mae")
+            or lf_name == "bcl1"
+            or lf_name == "mae"
         ):
-            metrics = get_combined_metrics()
+            metrics = get_metrics_for_loss(lf_name)
 
         model.compile(
             optimizer=optimizer,
