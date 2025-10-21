@@ -47,9 +47,9 @@ cd "$SCRIPT_DIR"
 mkdir -p logs
 
 # Default parameters
-LOSS_FUNCTION="bcl1"
+LOSS_FUNCTION="fss"
 N_CHANNELS=4
-LEADTIME_CONDITIONING=18
+LEADTIME_CONDITIONING=15
 IMG_SIZE="512x512"
 DATASERIES_FILE=""
 DATASERIES_DIRECTORY="output/"
@@ -175,6 +175,13 @@ echo "Sequence stride:   $SEQUENCE_STRIDE_MINUTES minutes"
 echo "Sequence offset:   $SEQUENCE_OFFSET_MINUTES minutes"
 if [ -n "$CHECKPOINT_PATH" ]; then
     echo "Checkpoint:        $CHECKPOINT_PATH (fine-tuning mode)"
+    if [ -f "$CHECKPOINT_PATH" ]; then
+        echo "✅ CHECKPOINT FILE EXISTS"
+    else
+        echo "❌ CHECKPOINT FILE NOT FOUND"
+        echo "🛑 STOPPING TRAINING - CHECKPOINT FILE REQUIRED FOR FINE-TUNING"
+        exit 1
+    fi
 fi
 if [ -n "$LEARNING_RATE" ]; then
     echo "Learning rate:     $LEARNING_RATE"
@@ -314,11 +321,11 @@ echo "Log saved to: $LOG_FILE"
 #
 
 
-'''
-bash train_cloudcast.sh \
---label "multi_patch_10min" \
---loss_function ssim_mae_0.7_0.3 \
---checkpoint_path '/home/databourg/workspace/cloudcast2/checkpoints/unet-ssim_mae_0.8_0.2-hist=4-lc=18-oh=False-img_size=512x512/model.weights.h5' \
---dataseries_directory '/home/databourg/workspace/cloudcast/output_test'
-
-'''
+#'''
+#bash train_cloudcast.sh \
+#--label "multi_patch_10min" \
+#--loss_function ssim_mae_0.7_0.3 \
+#--checkpoint_path '/home/databourg/workspace/cloudcast2/checkpoints/unet-ssim_mae_0.8_0.2-hist=4-lc=18-oh=False-img_size=512x512/model.weights.h5' \
+#--dataseries_directory '/home/databourg/workspace/cloudcast/output_test'
+#
+#'''

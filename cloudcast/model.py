@@ -2,7 +2,6 @@ import numpy as np
 import os
 import skimage.io as io
 import skimage.transform as trans
-import numpy as np
 
 import tensorflow as tf
 
@@ -267,37 +266,70 @@ def unet(
         )
 
     if pretrained_weights is not None:
-        weights_loaded = False
+        print(f"🔍 ATTEMPTING TO LOAD WEIGHTS FROM: {pretrained_weights}")
         
-        # Try different loading methods
-        loading_methods = [
-            # Method 1: Load with by_name=True (for legacy H5 files)
-            lambda: model.load_weights(pretrained_weights, by_name=True, skip_mismatch=True),
-            # Method 2: Load without by_name (for newer H5 files)
-            lambda: model.load_weights(pretrained_weights, skip_mismatch=True),
-            # Method 3: Load with by_name=False (strict loading)
-            lambda: model.load_weights(pretrained_weights, by_name=False, skip_mismatch=True),
-        ]
-        
-        for i, load_method in enumerate(loading_methods, 1):
-            try:
-                load_method()
-                print(f"Successfully loaded weights from {pretrained_weights} (method {i})")
-                weights_loaded = True
-                break
-            except Exception as e:
-                if i == len(loading_methods):  # Last method failed
-                    if force_load_weights:
-                        print(f"Warning: Could not load weights from {pretrained_weights}: {e}")
-                        print("Force loading enabled - continuing with partial weights...")
-                        weights_loaded = True  # Force continue even with warnings
-                    else:
-                        print(f"Warning: Could not load weights from {pretrained_weights}: {e}")
-                        print("Continuing with random weights...")
+        # Check if file exists first
+        if not os.path.exists(pretrained_weights):
+            print(f"❌ WEIGHT FILE NOT FOUND: {pretrained_weights}")
+            print("📁 CHECKING AVAILABLE CHECKPOINTS:")
+            checkpoint_dir = os.path.dirname(pretrained_weights)
+            if os.path.exists(checkpoint_dir):
+                available_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.h5') or f.endswith('.weights.h5')]
+                if available_files:
+                    print("Available weight files:")
+                    for f in available_files:
+                        print(f"  - {os.path.join(checkpoint_dir, f)}")
                 else:
-                    print(f"Method {i} failed: {e}, trying next method...")
+                    print("No .h5 or .weights.h5 files found in directory")
+            else:
+                print(f"Checkpoint directory does not exist: {checkpoint_dir}")
+            print("🛑 STOPPING TRAINING - WEIGHT FILE NOT FOUND")
+            raise FileNotFoundError(f"Weight file not found: {pretrained_weights}")
+        else:
+            print(f"✅ WEIGHT FILE FOUND: {pretrained_weights}")
+            weights_loaded = False
+            
+            # Try different loading methods
+            loading_methods = [
+                # Method 1: Load with by_name=True (for legacy H5 files)
+                lambda: model.load_weights(pretrained_weights, by_name=True, skip_mismatch=True),
+                # Method 2: Load without by_name (for newer H5 files)
+                lambda: model.load_weights(pretrained_weights, skip_mismatch=True),
+                # Method 3: Load with by_name=False (strict loading)
+                lambda: model.load_weights(pretrained_weights, by_name=False, skip_mismatch=True),
+            ]
+            
+            for i, load_method in enumerate(loading_methods, 1):
+                try:
+                    print(f"🔄 TRYING LOADING METHOD {i}...")
+                    load_method()
+                    print(f"✅ SUCCESSFULLY LOADED WEIGHTS FROM: {pretrained_weights} (method {i})")
+                    weights_loaded = True
+                    break
+                except Exception as e:
+                    if i == len(loading_methods):  # Last method failed
+                        if force_load_weights:
+                            print(f"⚠️  WARNING: COULD NOT LOAD WEIGHTS FROM: {pretrained_weights}")
+                            print(f"   Error: {e}")
+                            print("🔧 FORCE LOADING ENABLED - CONTINUING WITH PARTIAL WEIGHTS...")
+                            weights_loaded = True  # Force continue even with warnings
+                        else:
+                            print(f"❌ FAILED TO LOAD WEIGHTS FROM: {pretrained_weights}")
+                            print(f"   Error: {e}")
+                            print("🛑 STOPPING TRAINING - COULD NOT LOAD WEIGHTS")
+                            raise RuntimeError(f"Could not load weights from {pretrained_weights}: {e}")
+                    else:
+                        print(f"⚠️  METHOD {i} FAILED: {e}")
+                        print(f"🔄 TRYING NEXT METHOD...")
+            
+            if not weights_loaded and not force_load_weights:
+                print("🛑 STOPPING TRAINING - ALL LOADING METHODS FAILED")
+                raise RuntimeError(f"All loading methods failed for {pretrained_weights}")
         
-        if not weights_loaded and not force_load_weights:
-            print("All loading methods failed. Continuing with random weights...")
+        # Final status message
+        if weights_loaded:
+            print("🎯 WEIGHT LOADING: SUCCESS")
+        else:
+            print("🎯 WEIGHT LOADING: FAILED - STOPPING TRAINING")
 
     return model

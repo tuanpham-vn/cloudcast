@@ -28,11 +28,11 @@ def parse_command_line():
                        help="Overlap ratio between patches (default: 0.5)")
     parser.add_argument("--center_crop_ratio", action="store", type=float, default=0.5,
                        help="Center crop ratio for output patches (default: 0.6, range: 0.0-1.0)")
-    parser.add_argument("--n_forecast", action="store", type=int, default=18,
+    parser.add_argument("--n_forecast", action="store", type=int, default=15,
                        help="Number of forecast frames (default: 18)")
     parser.add_argument("--n_channels", action="store", type=int, default=4,
                        help="Number of input data channels (without leadtime conditioning)")
-    parser.add_argument("--leadtime_conditioning", action="store", type=int, default=10,
+    parser.add_argument("--leadtime_conditioning", action="store", type=int, default=20,
                        help="Leadtime conditioning depth (default: 18)")
     parser.add_argument("--batch_size", action="store", type=int, default=16,
                        help="Batch size for prediction (default: 8)")
@@ -42,7 +42,7 @@ def parse_command_line():
                        help="Create PNG files from predictions (default: False)")
     parser.add_argument("--show_progress", action="store_true",
                        help="Show progress during processing")
-    parser.add_argument("--sequence_stride_minutes", action="store", type=int, default=10,
+    parser.add_argument("--sequence_stride_minutes", action="store", type=int, default=20,
                        help="Stride in minutes between predictions (default: 20, use 10 for 10-minute models)")
     parser.add_argument("--force_n_channels", action="store", type=int, default=None,
                        help="Force specific TOTAL number of channels including leadtime (to fix tensor shape mismatch)")

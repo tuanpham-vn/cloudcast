@@ -233,10 +233,20 @@ def run_model(args, opts):
     pretrained_weights = None
     if args.checkpoint_path:
         pretrained_weights = args.checkpoint_path
-        print(f"Fine-tuning from checkpoint: {pretrained_weights}")
+        print(f"🎯 FINE-TUNING FROM CHECKPOINT: {pretrained_weights}")
+        if os.path.exists(pretrained_weights):
+            print("✅ CHECKPOINT FILE EXISTS")
+        else:
+            print("❌ CHECKPOINT FILE NOT FOUND")
+            print("🛑 STOPPING TRAINING - CHECKPOINT FILE REQUIRED FOR FINE-TUNING")
+            sys.exit(1)
     elif args.cont:
         pretrained_weights = "checkpoints/{}/model.weights.h5".format(opts.get_label())
-        print("Reading old weights from '{}'".format(pretrained_weights))
+        print(f"🔄 CONTINUING FROM PREVIOUS WEIGHTS: {pretrained_weights}")
+        if os.path.exists(pretrained_weights):
+            print("✅ PREVIOUS WEIGHTS FILE EXISTS")
+        else:
+            print("❌ PREVIOUS WEIGHTS FILE NOT FOUND - WILL USE RANDOM WEIGHTS")
 
     img_size = get_img_size(opts.preprocess)
     n_channels = int(opts.n_channels)
@@ -322,13 +332,21 @@ def run_model(args, opts):
     with strategy.scope():
         optimizer = keras.optimizers.Adam(learning_rate=effective_lr)
         print(f"Learning rate: {effective_lr}")
-        m = unet(
-            pretrained_weights,
-            input_size=img_size + (n_channels,),
-            loss_function=args.loss_function,
-            optimizer=optimizer,
-            force_load_weights=args.force_load_weights,
-        )
+        try:
+            m = unet(
+                pretrained_weights,
+                input_size=img_size + (n_channels,),
+                loss_function=args.loss_function,
+                optimizer=optimizer,
+                force_load_weights=args.force_load_weights,
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            print(f"🛑 TRAINING STOPPED: {e}")
+            print("💡 SUGGESTIONS:")
+            print("  1. Check if the checkpoint file path is correct")
+            print("  2. Verify the checkpoint file exists and is accessible")
+            print("  3. Use --force_load_weights if you want to continue with partial weights")
+            sys.exit(1)
 
     start = datetime.datetime.now()
 
