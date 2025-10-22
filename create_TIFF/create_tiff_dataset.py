@@ -17,9 +17,9 @@ def parse_command_line():
     parser.add_argument("--output_dir", action="store", type=str, required=True,
                        help="Output directory for dataset")
     parser.add_argument("--start_date", action="store", type=str, required=True,
-                       help="Start date in YYYY-MM-DD format")
+                       help="Start date in YYYY-MM-DD or YYYY-MM-DD_HH:MM format")
     parser.add_argument("--end_date", action="store", type=str, required=True,
-                       help="End date in YYYY-MM-DD format")
+                       help="End date in YYYY-MM-DD or YYYY-MM-DD_HH:MM format")
     parser.add_argument("--img_size", action="store", type=str, default="512x512",
                        help="Output image size (WxH)")
     parser.add_argument("--n_channels", action="store", type=int, default=4,
@@ -56,14 +56,27 @@ def read_tif_file(filepath):
         print(f"Error reading {filepath}: {e}")
         return None
 
+def parse_datetime_string(date_str: str) -> datetime:
+    """Parse date string in YYYY-MM-DD or YYYY-MM-DD_HH:MM format"""
+    try:
+        # Try YYYY-MM-DD_HH:MM format first
+        return datetime.strptime(date_str, "%Y-%m-%d_%H:%M")
+    except ValueError:
+        try:
+            # Fall back to YYYY-MM-DD format (defaults to 00:00)
+            return datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"Invalid date format: {date_str}. Use YYYY-MM-DD or YYYY-MM-DD_HH:MM")
+
+
 def get_tif_files(input_dir, start_date, end_date, time_interval=10):
     """Get sorted list of TIF files within date range"""
     tif_files = []
     tif_times = []
 
-    # Parse date range
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    # Parse date range using the new function
+    start_dt = parse_datetime_string(start_date)
+    end_dt = parse_datetime_string(end_date)
 
     current_dt = start_dt
     while current_dt <= end_dt + timedelta(days=1):
@@ -82,7 +95,10 @@ def get_tif_files(input_dir, start_date, end_date, time_interval=10):
         # Move to next time step
         current_dt += timedelta(minutes=time_interval)
 
-    print(f"Found {len(tif_files)} TIF files out of {((end_dt - start_dt).days + 1) * 144} expected")  # 144 = 24*6 for 10-minute intervals
+    # Calculate expected files more accurately
+    total_minutes = int((end_dt - start_dt).total_seconds() / 60)
+    expected_files = total_minutes // time_interval + 1
+    print(f"Found {len(tif_files)} TIF files out of {expected_files} expected")
     return tif_files, tif_times
 
 def extract_patches_sliding_window(image, patch_size=(512, 512), overlap_ratio=0.1):
@@ -404,9 +420,9 @@ def main():
         print("ERROR: No TIF files found!")
         return
 
-    # Calculate expected vs found files
-    start_dt = datetime.strptime(args.start_date, "%Y-%m-%d")
-    end_dt = datetime.strptime(args.end_date, "%Y-%m-%d")
+    # Calculate expected vs found files using the new parsing function
+    start_dt = parse_datetime_string(args.start_date)
+    end_dt = parse_datetime_string(args.end_date)
     total_minutes = int((end_dt - start_dt).total_seconds() / 60)
     expected_files = total_minutes // args.time_interval + 1
     missing_count = expected_files - len(tif_files)
@@ -542,6 +558,15 @@ if __name__ == "__main__":
       --img_size 512x512 \
       --n_channels 4 \
       --leadtime_conditioning 18 \
+      --time_interval 10
+    
+    # With specific time range (YYYY-MM-DD_HH:MM format)
+    python create_TIFF/create_tiff_dataset.py \
+      --input_dir data \
+      --output_dir output \
+      --start_date 2025-09-04_08:00 \
+      --end_date 2025-09-04_18:00 \
+      --img_size 512x512 \
       --time_interval 10
     
     # For large datasets (5000+ files) with progress tracking
