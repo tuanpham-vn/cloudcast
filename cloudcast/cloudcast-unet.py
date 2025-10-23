@@ -1,39 +1,82 @@
+import os
+# Reduce TF logs and disable XLA by default to avoid excessive warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ.pop('TF_XLA_FLAGS', None)
+
 from datetime import datetime
 from tensorflow.keras.models import save_model
 from model import *
 from base.preprocess import *
 from base.fileutils import *
-from base.plotutils import *
 from base.generators import *
 from base.opts import CloudCastOptions
 from base.dataseries import LazyDataSeries
 import math
 import argparse
 import json
+import sys
+import tensorflow as tf
+from tensorflow import keras
+import numpy as np
 
 EPOCHS = 500
 
+
+def print_loss_function_info():
+    """
+    In thông tin về các hàm loss có sẵn và cách sử dụng chúng
+    """
+    print("Các hàm loss có sẵn trong CloudCast:")
+    print("  - MeanSquaredError: Hàm loss cơ bản, tính trung bình bình phương sai số")
+    print("  - ssim: Structural Similarity Index, đánh giá độ tương đồng về cấu trúc giữa ảnh dự đoán và ảnh thực")
+    print("    Cú pháp: ssim hoặc ssim_<size> (ví dụ: ssim_21 để sử dụng mask size 21)")
+    print("  - msssim: Multi-Scale SSIM, phiên bản đa tỷ lệ của SSIM")
+    print("    Cú pháp: msssim hoặc msssim_<size>")
+    print("  - bcl1: Binary Cross-Entropy + L1, kết hợp BCE và MAE")
+    print("  - mae: Mean Absolute Error, tính trung bình sai số tuyệt đối")
+    print("  - fss: Fractions Skill Score, đánh giá độ chính xác của dự báo theo không gian")
+    print("    Cú pháp: fss hoặc fss_<mask_size>_<bins> (ví dụ: fss_5_0.1,0.5,0.9)")
+    print("  - ks: Kolmogorov-Smirnov, đánh giá sự khác biệt giữa hai phân phối")
+    print("    Cú pháp: ks hoặc ks_<mask_size> (ví dụ: ks_3)")
+    print("  - coss: Cosine Similarity, đo độ tương đồng dựa trên góc giữa hai vector")
+    print("\nVí dụ sử dụng:")
+    print("  python cloudcast-unet.py --loss_function ssim")
+    print("  python cloudcast-unet.py --loss_function fss_5_0.1,0.5,0.9")
+    print("  python cloudcast-unet.py --loss_function ks_3")
+    sys.exit(0)
 
 def parse_command_line():
     parser = argparse.ArgumentParser()
     parser.add_argument("--stop_date", action="store", type=str)
     parser.add_argument("--cont", action="store_true")
     parser.add_argument("--n_channels", action="store", type=int, default=4)
+    parser.add_argument("--loss_info", action="store_true", help="Hiển thị thông tin về các hàm loss và thoát")
     parser.add_argument(
-        "--loss_function", action="store", type=str, default="MeanSquaredError"
+        "--loss_function", action="store", type=str, default="ssim",
+        help=(
+            "Loss function: MeanSquaredError | ssim | msssim | bcl1 | fss | ks | coss | mae | "
+            "ssim_mae[_wSSIM_wMAE] (e.g., ssim_mae or ssim_mae_0.5_0.5)"
+        )
     )
     parser.add_argument(
-        "--preprocess", action="store", type=str, default="img_size=128x128"
+        "--preprocess", action="store", type=str, default="img_size=512x512"
     )
     parser.add_argument("--label", action="store", type=str)
-    parser.add_argument("--include_datetime", action="store_true", default=False)
-    parser.add_argument("--include_topography", action="store_true", default=False)
-    parser.add_argument("--include_terrain_type", action="store_true", default=False)
-    parser.add_argument("--leadtime_conditioning", action="store", type=int, default=12)
+    # Tăng leadtime_conditioning từ 12 (15 phút) lên 18 (10 phút) để giữ cùng khoảng thời gian dự báo (3 giờ)
+    parser.add_argument("--leadtime_conditioning", action="store", type=int, default=18)
     parser.add_argument("--reuse_y_as_x", action="store_true", default=False)
-    parser.add_argument(
-        "--include_sun_elevation_angle", action="store_true", default=False
-    )
+    parser.add_argument("--sequence_stride_minutes", action="store", type=int, default=10,
+                      help="Khoảng thời gian giữa các chuỗi dữ liệu liên tiếp (phút)")
+    parser.add_argument("--sequence_offset_minutes", action="store", type=int, default=0,
+                      help="Độ lệch thời gian cho chuỗi dữ liệu (phút)")
+    parser.add_argument("--learning_rate", action="store", type=float, default=None,
+                      help="Tốc độ học cho quá trình huấn luyện. Nếu fine-tune mà không chỉ định, mặc định 1e-5")
+    parser.add_argument("--checkpoint_path", action="store", type=str, default=None,
+                      help="Đường dẫn weights để fine-tune (mặc định dùng 1e-5 nếu không chỉ định learning rate)")
+    parser.add_argument("--no_mixed_precision", action="store_true", default=False,
+                      help="Disable mixed precision training (default: enabled if GPUs available)")
+    parser.add_argument("--force_load_weights", action="store_true", default=False,
+                      help="Force load weights even if there are warnings (for fine-tuning)")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--start_date", action="store", type=str)
@@ -41,6 +84,9 @@ def parse_command_line():
     group.add_argument("--dataseries_directory", action="store", type=str, default=None)
 
     args = parser.parse_args()
+    
+    if args.loss_info:
+        print_loss_function_info()
 
     if args.label is not None:
         opts = CloudCastOptions(label=args.label)
@@ -64,6 +110,16 @@ def parse_command_line():
         args.stop_date = datetime.datetime.strptime(args.stop_date, "%Y-%m-%d")
 
     return args, opts
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        return json.JSONEncoder.default(self, obj)
+
 
 
 def get_total_batch_size(img_size):
@@ -244,7 +300,7 @@ class NaNLossCallback(keras.callbacks.Callback):
 
 def callbacks(args, opts):
     cp_cb = tf.keras.callbacks.ModelCheckpoint(
-        filepath="checkpoints/{}/cp.ckpt".format(opts.get_label()),
+        filepath="checkpoints/{}/model.weights.h5".format(opts.get_label()),
         save_weights_only=True,
         save_best_only=True,
     )
@@ -291,25 +347,28 @@ def run_model(args, opts):
     model_dir = "models/{}".format(opts.get_label())
 
     pretrained_weights = None
-    if args.cont:
-        pretrained_weights = "checkpoints/{}/cp.ckpt".format(opts.get_label())
-        print("Reading old weights from '{}'".format(pretrained_weights))
+    if args.checkpoint_path:
+        pretrained_weights = args.checkpoint_path
+        print(f"🎯 FINE-TUNING FROM CHECKPOINT: {pretrained_weights}")
+        if os.path.exists(pretrained_weights):
+            print("✅ CHECKPOINT FILE EXISTS")
+        else:
+            print("❌ CHECKPOINT FILE NOT FOUND")
+            print("🛑 STOPPING TRAINING - CHECKPOINT FILE REQUIRED FOR FINE-TUNING")
+            sys.exit(1)
+    elif args.cont:
+        pretrained_weights = "checkpoints/{}/model.weights.h5".format(opts.get_label())
+        print(f"🔄 CONTINUING FROM PREVIOUS WEIGHTS: {pretrained_weights}")
+        if os.path.exists(pretrained_weights):
+            print("✅ PREVIOUS WEIGHTS FILE EXISTS")
+        else:
+            print("❌ PREVIOUS WEIGHTS FILE NOT FOUND - WILL USE RANDOM WEIGHTS")
 
     img_size = get_img_size(opts.preprocess)
     n_channels = int(opts.n_channels)
 
-    if opts.include_datetime:
-        n_channels += 2
-    if opts.include_topography:
-        n_channels += 1
-    if opts.include_terrain_type:
-        n_channels += 1
+    # Chỉ giữ lại leadtime_conditioning
     if opts.leadtime_conditioning:
-        if opts.onehot_encoding:
-            n_channels += leadtime_conditioning
-        else:
-            n_channels += 1
-    if opts.include_sun_elevation_angle:
         n_channels += 1
 
     # Hiển thị thông tin về hàm loss được sử dụng (sau khi có thể đã override)
