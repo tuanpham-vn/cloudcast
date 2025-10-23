@@ -30,9 +30,40 @@ def read_times_from_preformatted_files_directory(dirname):
 
     times = list(toc.keys())
 
+<<<<<<< Updated upstream
     times.sort()
     print("Read {} times from {}".format(len(times), dirname))
     return times, toc
+=======
+    print("Found {} NPZ files in directory (new format - multiple patches)".format(len(npz_files)))
+    file_idx = 0
+    for npz_file in npz_files:
+        try:
+            ds = np.load(npz_file)
+            data = ds["arr_0"]  
+            times = ds["arr_1"]
+            data_cache[npz_file] = data
+            for i, t in enumerate(times):
+                t_normalized = normalize_time_string(t)
+                key = (t_normalized, file_idx)
+                toc[key] = {
+                    "filename": npz_file,
+                    "index": i,
+                    "time": t_normalized,
+                    "file_idx": file_idx,
+                }
+            file_idx += 1
+            print("  Loaded {} timesteps from {} (cached in memory)".format(len(times), os.path.basename(npz_file)))
+        except Exception as e:
+            print("  Warning: Failed to load {}: {}".format(npz_file, e))
+            continue
+
+    times = sorted(list(toc.keys()), key=lambda x: (x[0], x[1]))
+    print("Total samples across all patches: {}".format(len(times)))
+    print("Unique timestamps: {}".format(len(set([t[0] for t in times]))))
+    print("Number of patches: {}".format(file_idx))
+    return times, toc, data_cache
+>>>>>>> Stashed changes
 
 
 def read_datas_from_preformatted_files_directory(dirname, toc, times):
@@ -42,15 +73,40 @@ def read_datas_from_preformatted_files_directory(dirname, toc, times):
         e = toc[t]
         idx = e["index"]
         filename = e["filename"]
+<<<<<<< Updated upstream
         datafile = np.load(filename, mmap_mode="r")
         datas.append(datafile[idx])
 
     return datas, times
+=======
+        if filename.endswith('.npz'):
+            if data_cache is not None and filename in data_cache:
+                arr = data_cache[filename][idx]
+            else:
+                datafile = np.load(filename, mmap_mode="r")
+                arr = datafile["arr_0"][idx]
+        else:
+            datafile = np.load(filename, mmap_mode="r")
+            arr = datafile[idx]  
+        datas.append(arr)
+    # Return timestamps as strings
+    times_str = []
+    for t in times:
+        if isinstance(t, tuple):
+            times_str.append(t[0])
+        else:
+            times_str.append(t)
+    return datas, times_str
+>>>>>>> Stashed changes
 
 
 def read_times_from_preformatted_file(filename):
     ds = np.load(filename)
+<<<<<<< Updated upstream
     data = ds["arr_0"]
+=======
+    data = ds["arr_0"] 
+>>>>>>> Stashed changes
     times = ds["arr_1"]
 
     toc = {}
@@ -206,11 +262,18 @@ class DataSeriesGenerator:
         return x, y, xtimes, ytimes
 
     def __call__(self):
-        for i in range(len(self.placeholder)):
-            elem = self.__getitem__(i)
-            yield elem
-
-        self.on_epoch_end()
+        # For training with .repeat(), we need infinite loop but controlled by steps_per_epoch
+        while True:
+            for i in range(len(self.placeholder)):
+                elem = self.__getitem__(i)
+                yield elem
+            
+            # Shuffle data after each full pass through the dataset
+            self.on_epoch_end()
+            
+            # For non-training modes, break after one pass
+            if self.operating_mode != OpMode.TRAIN:
+                break
 
     def on_epoch_end(self):
         if self.shuffle_data:
@@ -429,7 +492,19 @@ class LazyDataSeries:
             # trained with this software
             x = tf.concat([0.01 * x[..., 0:n], x[..., n:]], axis=-1)
             y = y * 0.01
+<<<<<<< Updated upstream
             return (x, y, t)
+=======
+            
+            # # Clip to [0, 1] range to prevent any outliers
+            # x = tf.clip_by_value(x, 0.0, 1.0)
+            # y = tf.clip_by_value(y, 0.0, 1.0)
+            
+            if t is not None:
+                return (x, y, t)
+            else:
+                return (x, y)
+>>>>>>> Stashed changes
 
         placeholder = None
 
@@ -477,9 +552,37 @@ class LazyDataSeries:
                 lambda x, y, t: normalize(x, y, t, self.n_channels)
             )
 
+<<<<<<< Updated upstream
         dataset = dataset.batch(self.batch_size, drop_remainder=True).prefetch(AUTOTUNE)
 
         if self.cache:
             dataset = dataset.cache()
+=======
+        # Ensure we have enough samples for at least one complete batch
+        if len(placeholder) < self.batch_size:
+            print(f"Warning: Not enough samples ({len(placeholder)}) for batch size {self.batch_size}")
+            print("Reducing batch size to match available samples...")
+            self.batch_size = len(placeholder)
+        
+        # For multi-GPU training, ensure batch size is consistent across replicas
+        # This prevents the "Inputs must have the same size and shape" error
+        dataset = dataset.batch(self.batch_size, drop_remainder=True)
+        
+        # Additional safety: ensure all batches have exactly the same size
+        def ensure_batch_size(x, y):
+            # This ensures all batches have exactly batch_size samples
+            return x, y
+        
+        dataset = dataset.map(ensure_batch_size, num_parallel_calls=AUTOTUNE)
+        
+        if self.cache and len(placeholder) < 10000:
+            dataset = dataset.cache()
+        
+        # Repeat dataset for training to ensure continuous data flow
+        if self.operating_mode == OpMode.TRAIN:
+            dataset = dataset.repeat()
+        
+        dataset = dataset.prefetch(AUTOTUNE)
+>>>>>>> Stashed changes
 
         return dataset

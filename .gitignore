@@ -1,3 +1,6 @@
 __pycache__
 checkpoints
 models
+*.npz
+/logs
+/predictions

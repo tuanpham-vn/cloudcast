@@ -1,0 +1,15 @@
+name: cloudcast
+channels:
+  - conda-forge
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.11.14
+  - pip=25.2
+  - setuptools=80.9.0
+  - wheel=0.45.1
+  - cudatoolkit=11.8.0
+  - cudnn=8.9.2
+  - nccl=2.20.3
+  - pip:
+    - -r cloudcast-requirements.txt
