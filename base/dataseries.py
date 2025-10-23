@@ -22,19 +22,24 @@ OpMode = Enum("OperatingMode", ["TRAIN", "INFER", "VERIFY"])
 
 def read_times_from_preformatted_files_directory(dirname):
     toc = {}
-    for f in glob.glob("{}/*-times.npy".format(dirname)):
-        times = np.load(f)
+    data_cache = {}
 
-        for i, t in enumerate(times):
-            toc[t] = {"filename": f.replace("-times", ""), "index": i, "time": t}
+    time_files = glob.glob(f"{dirname}/*-times.npy")
+    if time_files:
+        for f in time_files:
+            times = np.load(f)
+            for i, t in enumerate(times):
+                toc[t] = {"filename": f.replace("-times", ""), "index": i, "time": t}
+        times = list(toc.keys())
+        times.sort()
+        print("Read {} times from {} (old format)".format(len(times), dirname))
+        return times, toc, data_cache
 
-    times = list(toc.keys())
+    npz_files = sorted(glob.glob(f"{dirname}/*.npz"))
+    if not npz_files:
+        print(f"ERROR: No NPZ files found in {dirname}")
+        return [], {}, data_cache
 
-<<<<<<< Updated upstream
-    times.sort()
-    print("Read {} times from {}".format(len(times), dirname))
-    return times, toc
-=======
     print("Found {} NPZ files in directory (new format - multiple patches)".format(len(npz_files)))
     file_idx = 0
     for npz_file in npz_files:
@@ -63,22 +68,16 @@ def read_times_from_preformatted_files_directory(dirname):
     print("Unique timestamps: {}".format(len(set([t[0] for t in times]))))
     print("Number of patches: {}".format(file_idx))
     return times, toc, data_cache
->>>>>>> Stashed changes
 
 
-def read_datas_from_preformatted_files_directory(dirname, toc, times):
+def read_datas_from_preformatted_files_directory(dirname, toc, times, data_cache=None):
+    """Read data for given times from directory-based TOC, using cache when available."""
     datas = []
 
     for t in times:
         e = toc[t]
         idx = e["index"]
         filename = e["filename"]
-<<<<<<< Updated upstream
-        datafile = np.load(filename, mmap_mode="r")
-        datas.append(datafile[idx])
-
-    return datas, times
-=======
         if filename.endswith('.npz'):
             if data_cache is not None and filename in data_cache:
                 arr = data_cache[filename][idx]
@@ -97,16 +96,11 @@ def read_datas_from_preformatted_files_directory(dirname, toc, times):
         else:
             times_str.append(t)
     return datas, times_str
->>>>>>> Stashed changes
 
 
 def read_times_from_preformatted_file(filename):
     ds = np.load(filename)
-<<<<<<< Updated upstream
-    data = ds["arr_0"]
-=======
     data = ds["arr_0"] 
->>>>>>> Stashed changes
     times = ds["arr_1"]
 
     toc = {}
@@ -492,9 +486,6 @@ class LazyDataSeries:
             # trained with this software
             x = tf.concat([0.01 * x[..., 0:n], x[..., n:]], axis=-1)
             y = y * 0.01
-<<<<<<< Updated upstream
-            return (x, y, t)
-=======
             
             # # Clip to [0, 1] range to prevent any outliers
             # x = tf.clip_by_value(x, 0.0, 1.0)
@@ -504,7 +495,6 @@ class LazyDataSeries:
                 return (x, y, t)
             else:
                 return (x, y)
->>>>>>> Stashed changes
 
         placeholder = None
 
@@ -552,12 +542,6 @@ class LazyDataSeries:
                 lambda x, y, t: normalize(x, y, t, self.n_channels)
             )
 
-<<<<<<< Updated upstream
-        dataset = dataset.batch(self.batch_size, drop_remainder=True).prefetch(AUTOTUNE)
-
-        if self.cache:
-            dataset = dataset.cache()
-=======
         # Ensure we have enough samples for at least one complete batch
         if len(placeholder) < self.batch_size:
             print(f"Warning: Not enough samples ({len(placeholder)}) for batch size {self.batch_size}")
@@ -583,6 +567,5 @@ class LazyDataSeries:
             dataset = dataset.repeat()
         
         dataset = dataset.prefetch(AUTOTUNE)
->>>>>>> Stashed changes
 
         return dataset
