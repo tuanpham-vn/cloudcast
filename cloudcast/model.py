@@ -28,7 +28,6 @@ from ks import make_KS_loss
 from bcl1 import make_bc_l1_loss
 from mae import make_MAE_loss
 
-from tensorflow.keras import mixed_precision
 from tensorflow.python.client import device_lib
 
 
@@ -46,21 +45,6 @@ def get_compute_capability(gpu_id=0):
             return details["compute_capability"]
 
     return None
-
-
-cc = get_compute_capability()
-
-if cc is not None and int(cc[0]) >= 7:
-    policy = mixed_precision.Policy("mixed_float16")
-    mixed_precision.set_global_policy(policy)
-
-policy = tf.keras.mixed_precision.global_policy()
-
-print(
-    "Compute dtype: {} Variable dtype: {} Number of GPUs: {}".format(
-        policy.compute_dtype, policy.variable_dtype, len(get_available_gpus())
-    )
-)
 
 
 def get_loss_function(loss_function):
@@ -82,6 +66,7 @@ def get_loss_function(loss_function):
         ssim_loss = make_SSIM_loss()
         mae_loss = make_MAE_loss()
 
+        @tf.function
         def combined_loss(y_true, y_pred):
             return w_ssim * ssim_loss(y_true, y_pred) + w_mae * mae_loss(y_true, y_pred)
 
@@ -126,15 +111,13 @@ def get_loss_function(loss_function):
 
         return make_KS_loss(int(values[1]))
     elif loss_function == "coss":
-        ngpu = len(get_available_gpus())
-
+        @tf.function
         def coss(yt, yp):
             lf = tf.keras.losses.CosineSimilarity(
                 reduction=tf.keras.losses.Reduction.NONE
             )
             loss = lf(tf.expand_dims(yt, -1), tf.expand_dims(yp, -1))
-            loss = tf.reduce_mean(loss) * (1.0 / ngpu)
-            return loss
+            return tf.reduce_mean(loss)
 
         return coss
 

@@ -8,3 +8,4 @@ models
 /training_visualizations
 /rainfall_analysis
 /rainfall_analysis_results
+*.npz

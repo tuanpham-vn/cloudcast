@@ -239,11 +239,18 @@ class DataSeriesGenerator:
         return x, y, xtimes, ytimes
 
     def __call__(self):
-        for i in range(len(self.placeholder)):
-            elem = self.__getitem__(i)
-            yield elem
-
-        self.on_epoch_end()
+        # For training with .repeat(), we need infinite loop but controlled by steps_per_epoch
+        while True:
+            for i in range(len(self.placeholder)):
+                elem = self.__getitem__(i)
+                yield elem
+            
+            # Shuffle data after each full pass through the dataset
+            self.on_epoch_end()
+            
+            # For non-training modes, break after one pass
+            if self.operating_mode != OpMode.TRAIN:
+                break
 
     def on_epoch_end(self):
         if self.shuffle_data:
@@ -267,6 +274,7 @@ class LazyDataSeries:
             # Đã loại bỏ các tính năng không cần thiết
 
         self.batch_size = int(kwargs.get("batch_size", 1))
+        self.global_batch_size = kwargs.get("global_batch_size", None)
         self.dataseries_file = kwargs.get("dataseries_file", None)
         self.dataseries_directory = kwargs.get("dataseries_directory", None)
         self.start_date = kwargs.get("start_date", None)
@@ -503,6 +511,11 @@ class LazyDataSeries:
             # This ensures consistent data range between training and inference
             x = tf.concat([0.01 * x[..., 0:n], x[..., n:]], axis=-1)
             y = y * 0.01
+            
+            # Clip to [0, 1] range to prevent any outliers
+            x = tf.clip_by_value(x, 0.0, 1.0)
+            y = tf.clip_by_value(y, 0.0, 1.0)
+            
             if t is not None:
                 return (x, y, t)
             else:
@@ -542,17 +555,20 @@ class LazyDataSeries:
         dataset = tf.data.Dataset.from_generator(gen, output_signature=sig)
 
         # Apply normalization for all operating modes to ensure consistent data range [0,1]
+        # For multi-GPU training, use fewer parallel calls to prevent deadlock
+        parallel_calls = 2 if self.global_batch_size is not None else AUTOTUNE
+        
         if self.operating_mode == OpMode.TRAIN:
             # For training mode: only (x, y) are returned
             dataset = dataset.map(
                 lambda x, y: normalize(x, y, None, self.n_channels),
-                num_parallel_calls=AUTOTUNE
+                num_parallel_calls=parallel_calls
             )
         else:
             # For inference/verify modes: (x, y, t) are returned
             dataset = dataset.map(
                 lambda x, y, t: normalize(x, y, t, self.n_channels),
-                num_parallel_calls=AUTOTUNE
+                num_parallel_calls=parallel_calls
             )
         
         # Apply data augmentation (flip) only for non-training modes when using old data format
@@ -563,13 +579,51 @@ class LazyDataSeries:
         ):
             dataset = dataset.map(
                 lambda x, y, t: flip(x, y, t, self.n_channels),
-                num_parallel_calls=AUTOTUNE
+                num_parallel_calls=parallel_calls
             )
 
-        dataset = dataset.batch(self.batch_size, drop_remainder=True)
+        # Determine the correct batch size for dataset batching
+        if self.global_batch_size is not None:
+            # Multi-GPU training: use global batch size for dataset batching
+            # MirroredStrategy will automatically split this across GPUs
+            dataset_batch_size = self.global_batch_size
+            print(f"✓ Multi-GPU dataset batching: using global_batch_size={dataset_batch_size}")
+        else:
+            # Single GPU training: use per-replica batch size
+            dataset_batch_size = self.batch_size
+            print(f"✓ Single GPU dataset batching: using batch_size={dataset_batch_size}")
+        
+        # Ensure we have enough samples for at least one complete batch
+        if len(placeholder) < dataset_batch_size:
+            print(f"Warning: Not enough samples ({len(placeholder)}) for batch size {dataset_batch_size}")
+            print("Reducing batch size to match available samples...")
+            dataset_batch_size = len(placeholder)
+            if self.global_batch_size is not None:
+                self.global_batch_size = dataset_batch_size
+            self.batch_size = dataset_batch_size
+        
+        # Batch the dataset with the appropriate batch size
+        dataset = dataset.batch(dataset_batch_size, drop_remainder=True)
+        
+        # Additional safety: ensure all batches have exactly the same size
+        def ensure_batch_size(x, y):
+            # This ensures all batches have exactly dataset_batch_size samples
+            # For multi-GPU: MirroredStrategy will split global_batch_size across GPUs
+            return x, y
+        
+        # For multi-GPU training, use fewer parallel calls to prevent deadlock
+        if self.global_batch_size is not None:
+            dataset = dataset.map(ensure_batch_size, num_parallel_calls=2)
+        else:
+            dataset = dataset.map(ensure_batch_size, num_parallel_calls=AUTOTUNE)
         
         if self.cache and len(placeholder) < 10000:
             dataset = dataset.cache()
+        
+        # For multi-GPU training, don't use repeat() as MirroredStrategy handles this
+        # For single GPU training, use repeat() for continuous data flow
+        if self.operating_mode == OpMode.TRAIN and self.global_batch_size is None:
+            dataset = dataset.repeat()
         
         dataset = dataset.prefetch(AUTOTUNE)
 
