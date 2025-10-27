@@ -4,15 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6e4db0ab-ef18-4365-b03f-166d02a904c8" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/base/dataseries.py" beforeDir="false" afterPath="$PROJECT_DIR$/base/dataseries.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cloudcast-environment.yml" beforeDir="false" afterPath="$PROJECT_DIR$/cloudcast-environment.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cloudcast-requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/cloudcast-requirements.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cloudcast/cloudcast-unet.py" beforeDir="false" afterPath="$PROJECT_DIR$/cloudcast/cloudcast-unet.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cloudcast/model.py" beforeDir="false" afterPath="$PROJECT_DIR$/cloudcast/model.py" afterDir="false" />
-    </list>
+    <list default="true" id="6e4db0ab-ef18-4365-b03f-166d02a904c8" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

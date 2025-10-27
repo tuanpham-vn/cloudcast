@@ -139,47 +139,42 @@ def get_total_batch_size(img_size):
     return total_batch_size
 
 
-def with_dataset(m, args, opts, per_replica_batch_size=None, global_batch_size=None):
+def with_dataset(m, args, opts, per_replica_batch_size=None):
     img_size = get_img_size(args.preprocess)
     
-    gpus = tf.config.list_physical_devices('GPU')
-    
-    # Use batch sizes calculated in run_model()
-    if hasattr(args, 'per_replica_batch_size') and hasattr(args, 'global_batch_size'):
-        batch_size = args.per_replica_batch_size
-        global_batch_size = args.global_batch_size
-        print(f"✓ Using batch sizes from run_model: per_replica={batch_size}, global={global_batch_size}")
-    elif per_replica_batch_size is not None and global_batch_size is not None:
+    if per_replica_batch_size is not None:
         batch_size = per_replica_batch_size
-        print(f"✓ Using provided batch sizes: per_replica={batch_size}, global={global_batch_size}")
+        print(f"✓ Using per-replica batch size from run_model: {batch_size}")
     else:
-        # Fallback calculation
-        total_batch_size = get_total_batch_size(img_size)
+        gpus = tf.config.list_physical_devices('GPU')
         if len(gpus) >= 2:
-            batch_size = total_batch_size // len(gpus)
-            global_batch_size = batch_size * len(gpus)
-            print(f"⚠️  Fallback calculation: per_replica={batch_size}, global={global_batch_size}")
+            total_batch_size = get_total_batch_size(img_size)
+            num_gpus = len(gpus)
+            if total_batch_size % num_gpus != 0:
+                adjusted_total_batch_size = (total_batch_size // num_gpus) * num_gpus
+                if adjusted_total_batch_size == 0:
+                    adjusted_total_batch_size = num_gpus
+                print(f"⚠️  Adjusting total batch size from {total_batch_size} to {adjusted_total_batch_size} for {num_gpus} GPUs")
+                batch_size = adjusted_total_batch_size // num_gpus
+            else:
+                batch_size = total_batch_size // num_gpus
         else:
+            total_batch_size = get_total_batch_size(img_size)
             batch_size = total_batch_size
-            global_batch_size = total_batch_size
-            print(f"⚠️  Single GPU fallback: batch_size={batch_size}")
+            print(f"✓ Single GPU batch size: {batch_size}")
 
-    # Create args dict without global_batch_size to avoid duplicate keyword argument
-    args_dict = vars(args).copy()
-    args_dict.pop('global_batch_size', None)
-    args_dict.pop('per_replica_batch_size', None)
-    
     lds = LazyDataSeries(
         img_size=img_size,
         batch_size=batch_size,
-        global_batch_size=global_batch_size,
         training_mode=True,
-        **args_dict,
+        **vars(args),
     )
 
     n = len(lds)
     r = 0.80
-    # Calculate sample counts first
+    train_ds = lds.get_dataset(take_ratio=r)
+    val_ds = lds.get_dataset(skip_ratio=r)
+    
     train_samples = int(n * r)
     val_samples = int(n * (1 - r))
     
@@ -202,46 +197,23 @@ def with_dataset(m, args, opts, per_replica_batch_size=None, global_batch_size=N
         val_samples = train_samples
         val_batch_size = lds.batch_size
     
-    # Create datasets only once
-    print("Creating training dataset...")
     train_ds = lds.get_dataset(take_ratio=r)
-    print("Creating validation dataset...")
     val_ds = lds.get_dataset(skip_ratio=r)
     
-    # Calculate steps based on global batch size for multi-GPU training
-    gpus = tf.config.list_physical_devices('GPU')
-    if len(gpus) >= 2:
-        # With MirroredStrategy, each step processes global_batch_size samples
-        train_ds_steps = max(1, train_samples // global_batch_size)
-        val_ds_steps = max(1, val_samples // global_batch_size)
-        print(f"✓ Multi-GPU steps calculation: global_batch_size={global_batch_size}, train_steps={train_ds_steps}, val_steps={val_ds_steps}")
-    else:
-        train_ds_steps = max(1, train_samples // lds.batch_size)
-        val_ds_steps = max(1, val_samples // val_batch_size)
+    train_ds_steps = max(1, train_samples // lds.batch_size)
+    val_ds_steps = max(1, val_samples // val_batch_size)
 
-    gpus = tf.config.list_physical_devices('GPU')
-    if len(gpus) >= 2:
-        print(
-            "Total number of train dataset samples: {:d} number of steps: {:d} (global_batch_size: {:d}, per_replica_batch_size: {:d})".format(
-                train_samples, train_ds_steps, global_batch_size, lds.batch_size
-            )
+    print(
+        "Total number of train dataset samples: {:d} number of steps: {:d} (batch_size: {:d})".format(
+            train_samples, train_ds_steps, lds.batch_size
         )
-        print(
-            "Total number of validation samples: {:d} number of steps: {:d} (global_batch_size: {:d}, per_replica_batch_size: {:d})".format(
-                val_samples, val_ds_steps, global_batch_size, val_batch_size
-            )
+    )
+
+    print(
+        "Total number of validation samples: {:d} number of steps: {:d} (batch_size: {:d})".format(
+            val_samples, val_ds_steps, val_batch_size
         )
-    else:
-        print(
-            "Total number of train dataset samples: {:d} number of steps: {:d} (batch_size: {:d})".format(
-                train_samples, train_ds_steps, lds.batch_size
-            )
-        )
-        print(
-            "Total number of validation samples: {:d} number of steps: {:d} (batch_size: {:d})".format(
-                val_samples, val_ds_steps, val_batch_size
-            )
-        )
+    )
     
     print("Verifying dataset pipeline...")
     try:
@@ -254,28 +226,12 @@ def with_dataset(m, args, opts, per_replica_batch_size=None, global_batch_size=N
         print("✓ Dataset pipeline verified")
         
         print("Checking batch consistency...")
-        expected_batch_size = global_batch_size if len(gpus) >= 2 else lds.batch_size
         for i, (x, y) in enumerate(train_ds.take(5)):
-            actual_batch_size = x.shape[0]
-            if actual_batch_size != expected_batch_size:
-                print(f"⚠️  Warning: Batch {i} has {actual_batch_size} samples instead of {expected_batch_size}")
+            if x.shape[0] != lds.batch_size:
+                print(f"⚠️  Warning: Batch {i} has {x.shape[0]} samples instead of {lds.batch_size}")
             if i >= 4:
                 break
-        print(f"✓ Batch consistency verified (expected: {expected_batch_size})")
-        
-        # Multi-GPU specific validation
-        if len(gpus) >= 2:
-            print("Multi-GPU validation:")
-            print(f"  - Global batch size: {global_batch_size}")
-            print(f"  - Per-replica batch size: {lds.batch_size}")
-            print(f"  - Number of GPUs: {len(gpus)}")
-            print(f"  - Expected samples per GPU: {global_batch_size // len(gpus)}")
-            
-            # Verify that global batch size is divisible by number of GPUs
-            if global_batch_size % len(gpus) != 0:
-                print(f"⚠️  Warning: Global batch size {global_batch_size} is not divisible by {len(gpus)} GPUs")
-            else:
-                print(f"✓ Global batch size is properly divisible across {len(gpus)} GPUs")
+        print("✓ Batch consistency verified")
         
     except Exception as e:
         print(f"✗ Dataset pipeline verification failed: {e}")
@@ -307,7 +263,6 @@ class NaNLossCallback(keras.callbacks.Callback):
         super().__init__()
         self.nan_epochs = []
         self.zero_loss_count = 0
-        self.first_epoch_notified = False
     
     def on_batch_end(self, batch, logs=None):
         logs = logs or {}
@@ -322,11 +277,6 @@ class NaNLossCallback(keras.callbacks.Callback):
     
     def on_epoch_begin(self, epoch, logs=None):
         self.zero_loss_count = 0
-        
-        # Show notification for first epoch
-        if epoch == 0 and not self.first_epoch_notified:
-            print("⏳ First epoch may take longer due to data processing and memory caching...")
-            self.first_epoch_notified = True
     
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -355,9 +305,9 @@ def callbacks(args, opts):
         save_best_only=True,
     )
     early_stopping_cb = keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=15, min_delta=0.0001, verbose=1
+        monitor="val_loss", patience=10, min_delta=0.0001, verbose=1
     )
-    reduce_lr_cb = keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=5, factor=0.5)
+    reduce_lr_cb = keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=3, factor=0.5)
     nan_callback = NaNLossCallback()
 
     return [cp_cb, early_stopping_cb, reduce_lr_cb, nan_callback]
@@ -483,32 +433,21 @@ def run_model(args, opts):
         print(f"✓ Using MirroredStrategy on {strategy.num_replicas_in_sync} GPUs")
         total_batch_size = get_total_batch_size(get_img_size(opts.preprocess))
         per_replica_batch_size = total_batch_size // strategy.num_replicas_in_sync
-        
-        # Ensure per_replica_batch_size is at least 1 and divides evenly
-        if per_replica_batch_size < 1:
-            per_replica_batch_size = 1
-            total_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
-            print(f"⚠️  Adjusted total batch size to {total_batch_size} to ensure minimum per-replica batch size")
-        
         global_batch_size = per_replica_batch_size * strategy.num_replicas_in_sync
-        print(f"✓ Total batch size: {total_batch_size}")
         print(f"✓ Per-replica batch size: {per_replica_batch_size} (each GPU processes this many samples)")
         print(f"✓ Global batch size: {global_batch_size} (total samples across all GPUs)")
         print(f"✓ Effective batch size per step: {global_batch_size} (all GPUs combined)")
         
-        # Store batch sizes for use in with_dataset
-        args.per_replica_batch_size = per_replica_batch_size
-        args.global_batch_size = global_batch_size
+        if per_replica_batch_size % strategy.num_replicas_in_sync != 0:
+            adjusted_batch_size = (per_replica_batch_size // strategy.num_replicas_in_sync) * strategy.num_replicas_in_sync
+            if adjusted_batch_size == 0:
+                adjusted_batch_size = strategy.num_replicas_in_sync
+            print(f"⚠️  Adjusting batch size from {per_replica_batch_size} to {adjusted_batch_size} for multi-GPU compatibility")
+            per_replica_batch_size = adjusted_batch_size
     else:
         strategy = tf.distribute.get_strategy()
         total_batch_size = get_total_batch_size(get_img_size(opts.preprocess))
         per_replica_batch_size = total_batch_size
-        global_batch_size = total_batch_size
-        
-        # Store batch sizes for use in with_dataset
-        args.per_replica_batch_size = per_replica_batch_size
-        args.global_batch_size = global_batch_size
-        
         if len(gpus) == 1:
             print("✓ Using single GPU")
             print(f"✓ Batch size: {per_replica_batch_size}")
@@ -559,8 +498,20 @@ def run_model(args, opts):
 
     start = datetime.datetime.now()
 
-    # Use batch sizes already calculated and stored in args
-    hist = with_dataset(m, args, opts, args.per_replica_batch_size, args.global_batch_size)
+    gpus = tf.config.list_physical_devices('GPU')
+    if len(gpus) >= 2:
+        total_batch_size = get_total_batch_size(get_img_size(opts.preprocess))
+        per_replica_batch_size = total_batch_size // len(gpus)
+        if total_batch_size % len(gpus) != 0:
+            adjusted_batch_size = (total_batch_size // len(gpus)) * len(gpus)
+            if adjusted_batch_size == 0:
+                adjusted_batch_size = len(gpus)
+            per_replica_batch_size = adjusted_batch_size // len(gpus)
+    else:
+        total_batch_size = get_total_batch_size(get_img_size(opts.preprocess))
+        per_replica_batch_size = total_batch_size
+    
+    hist = with_dataset(m, args, opts, per_replica_batch_size)
 
     duration = datetime.datetime.now() - start
 

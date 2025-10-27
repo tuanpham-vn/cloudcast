@@ -13,6 +13,7 @@ from base.preprocess import (
     get_img_size,
 )
 
+
 OpMode = Enum("OperatingMode", ["TRAIN", "INFER", "VERIFY"])
 
 
@@ -139,9 +140,6 @@ def read_datas_from_preformatted_file(all_times, all_data, req_times, toc):
         datas.append(all_data[index])
 
     return datas, req_times
-
-
-# Đã loại bỏ hàm fix_sun_angle_date vì không còn cần thiết
 
 
 class DataSeriesGenerator:
@@ -271,7 +269,6 @@ class LazyDataSeries:
             self.n_channels = int(kwargs.get("n_channels"))
             self.img_size = kwargs.get("img_size")
             self.leadtime_conditioning = int(kwargs.get("leadtime_conditioning"))
-            # Đã loại bỏ các tính năng không cần thiết
 
         self.batch_size = int(kwargs.get("batch_size", 1))
         self.global_batch_size = kwargs.get("global_batch_size", None)
@@ -286,9 +283,14 @@ class LazyDataSeries:
         self.analysis_time = kwargs.get("analysis_time", None)
         self.hourly_prediction = kwargs.get("hourly_prediction", False)
         operating_mode = kwargs.get("operating_mode", "TRAIN")
+        
+        # Add rotation angle parameter, default to 180 degrees
+        self.rotation_angle = int(kwargs.get("rotation_angle", 180))
+        if self.rotation_angle not in [0, 90, 180, 270]:
+            print(f"Warning: Invalid rotation angle {self.rotation_angle}. Using default 0 degrees.")
+            self.rotation_angle = 0 #180
 
         self.cache = kwargs.get("enable_cache", False)
-        # Optional stride filtering
         self.sequence_stride_minutes = kwargs.get("sequence_stride_minutes", None)
         self.sequence_offset_minutes = kwargs.get("sequence_offset_minutes", 0)
 
@@ -311,25 +313,6 @@ class LazyDataSeries:
             self.batch_size = 1
 
         self._placeholder = []
-
-        # reuse_y_as_x is True:
-        # first set   second set
-        # AB CDEF     BC DEFG
-        # -->         -->
-        # AB C        BC D
-        # AB D        BC E
-        # AB E        BC F
-        # AB F        BD G
-
-        # reuse_y_as_x is False:
-        # first set   second set
-        # AB CDEF     GH IJKL
-        # -->         -->
-        # AB C        GH I
-        # AB D        GH J
-        # AB E        GH K
-        # AB F        GH L
-
         self.initialize()
 
     def initialize(self):
@@ -390,22 +373,17 @@ class LazyDataSeries:
         step = 1 if self.reuse_y_as_x else self.n_channels + self.leadtime_conditioning
         n_fut = self.leadtime_conditioning if self.operating_mode != OpMode.INFER else 0
 
-        # If elements come from directory npz files, they are tuples: (timestamp, file_idx)
-        # We must not create sequences that cross file boundaries. Group by file_idx.
         has_file_index = len(self.elements) > 0 and isinstance(self.elements[0], tuple)
 
         if has_file_index:
             groups = {}
             for elem in self.elements:
-                # elem is (timestamp, file_idx)
                 file_idx = elem[1]
                 groups.setdefault(file_idx, []).append(elem)
 
-            # Sort each group's elements by timestamp string to ensure correct order
             for file_idx, elems in groups.items():
                 elems.sort(key=lambda t: t[0])
 
-            # Generate placeholders per file group
             for file_idx, elems in groups.items():
                 if (len(elems) - (self.n_channels + n_fut)) < 0:
                     continue
@@ -431,7 +409,6 @@ class LazyDataSeries:
 
                     i += step
         else:
-            # Fallback: original behavior for single-series inputs
             assert (
                 len(self.elements) - (self.n_channels + n_fut)
             ) >= 0, "Too few data to make a prediction: {} (need at least {})".format(
@@ -469,7 +446,6 @@ class LazyDataSeries:
             if len(self.elements) > 0 and isinstance(self.elements[0], tuple):
                 for ts, fidx in self.elements:
                     unique_files.add(fidx)
-                # recompute per-file unique timestamps
                 for fidx in unique_files:
                     per_file_counts[fidx] = len({ts for ts, fx in self.elements if fx == fidx})
             else:
@@ -500,15 +476,16 @@ class LazyDataSeries:
         return len(self._placeholder)
 
     def get_dataset(self, take_ratio=None, skip_ratio=None):
-        def flip(x, y, t, n):
-            x = tf.concat([tf.image.flip_up_down(x[..., 0:n]), x[..., n:]], axis=-1)
-            y = tf.image.flip_up_down(y)
-            return (x, y, t)
+        def rotate_image(image, angle):
+            """Rotate image by angle degrees"""
+            k = angle // 90  # Number of 90-degree rotations
+            if k == 0:
+                return image
+            return tf.image.rot90(image, k=k)
 
-        def normalize(x, y, t, n):
+        def normalize_and_rotate(x, y, t, n):
             # Data is already clipped to [0, 100] in create_tiff_dataset.py
             # Normalize to [0, 1] by multiplying by 0.01 for all operating modes
-            # This ensures consistent data range between training and inference
             x = tf.concat([0.01 * x[..., 0:n], x[..., n:]], axis=-1)
             y = y * 0.01
             
@@ -516,10 +493,17 @@ class LazyDataSeries:
             x = tf.clip_by_value(x, 0.0, 1.0)
             y = tf.clip_by_value(y, 0.0, 1.0)
             
+            # Apply rotation to both input and target images
+            x_rotated = tf.concat([
+                rotate_image(x[..., :n], self.rotation_angle),
+                x[..., n:]
+            ], axis=-1)
+            y_rotated = rotate_image(y, self.rotation_angle)
+            
             if t is not None:
-                return (x, y, t)
+                return (x_rotated, y_rotated, t)
             else:
-                return (x, y)
+                return (x_rotated, y_rotated)
 
         placeholder = None
 
@@ -554,42 +538,25 @@ class LazyDataSeries:
         gen = DataSeriesGenerator(placeholder=placeholder, **self.__dict__)
         dataset = tf.data.Dataset.from_generator(gen, output_signature=sig)
 
-        # Apply normalization for all operating modes to ensure consistent data range [0,1]
-        # For multi-GPU training, use fewer parallel calls to prevent deadlock
+        # Apply normalization and rotation for all operating modes
         parallel_calls = 2 if self.global_batch_size is not None else AUTOTUNE
         
         if self.operating_mode == OpMode.TRAIN:
-            # For training mode: only (x, y) are returned
             dataset = dataset.map(
-                lambda x, y: normalize(x, y, None, self.n_channels),
+                lambda x, y: normalize_and_rotate(x, y, None, self.n_channels),
                 num_parallel_calls=parallel_calls
             )
         else:
-            # For inference/verify modes: (x, y, t) are returned
             dataset = dataset.map(
-                lambda x, y, t: normalize(x, y, t, self.n_channels),
+                lambda x, y, t: normalize_and_rotate(x, y, t, self.n_channels),
                 num_parallel_calls=parallel_calls
             )
         
-        # Apply data augmentation (flip) only for non-training modes when using old data format
-        if (
-            self.operating_mode != OpMode.TRAIN
-            and self.dataseries_directory is None
-            and self.dataseries_file is None
-        ):
-            dataset = dataset.map(
-                lambda x, y, t: flip(x, y, t, self.n_channels),
-                num_parallel_calls=parallel_calls
-            )
-
         # Determine the correct batch size for dataset batching
         if self.global_batch_size is not None:
-            # Multi-GPU training: use global batch size for dataset batching
-            # MirroredStrategy will automatically split this across GPUs
             dataset_batch_size = self.global_batch_size
             print(f"✓ Multi-GPU dataset batching: using global_batch_size={dataset_batch_size}")
         else:
-            # Single GPU training: use per-replica batch size
             dataset_batch_size = self.batch_size
             print(f"✓ Single GPU dataset batching: using batch_size={dataset_batch_size}")
         
@@ -607,11 +574,8 @@ class LazyDataSeries:
         
         # Additional safety: ensure all batches have exactly the same size
         def ensure_batch_size(x, y):
-            # This ensures all batches have exactly dataset_batch_size samples
-            # For multi-GPU: MirroredStrategy will split global_batch_size across GPUs
             return x, y
         
-        # For multi-GPU training, use fewer parallel calls to prevent deadlock
         if self.global_batch_size is not None:
             dataset = dataset.map(ensure_batch_size, num_parallel_calls=2)
         else:
@@ -620,8 +584,6 @@ class LazyDataSeries:
         if self.cache and len(placeholder) < 10000:
             dataset = dataset.cache()
         
-        # For multi-GPU training, don't use repeat() as MirroredStrategy handles this
-        # For single GPU training, use repeat() for continuous data flow
         if self.operating_mode == OpMode.TRAIN and self.global_batch_size is None:
             dataset = dataset.repeat()
         

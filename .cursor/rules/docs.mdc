@@ -1,0 +1,68 @@
+---
+description: "CloudCast Project Documentation Rules"
+alwaysApply: true
+globs: "**/*"
+---
+
+# CloudCast - Dự Báo Mây Sử Dụng Deep Learning
+
+## Cấu Trúc Dự Án
+
+### Core Components
+- `base/`: Chứa các module cơ bản
+  - `dataseries.py`: Xử lý dữ liệu chuỗi thời gian và tạo dataset
+  - `fileutils.py`: Tiện ích xử lý file
+  - `generators.py`: Data generators cho training
+  - `preprocess.py`: Tiền xử lý dữ liệu
+  - `opts.py`: Quản lý options và cấu hình
+
+- `cloudcast/`: Chứa các module chính
+  - `cloudcast-unet.py`: Training script chính với U-Net architecture
+  - `model.py`: Định nghĩa model và loss functions
+  - `ssim.py`, `bcl1.py`, etc: Các loss function tùy chỉnh
+
+### Data Processing
+- `create_TIFF/`: Scripts để tạo và xử lý dữ liệu TIFF
+- `data/`: Thư mục chứa training data
+- `checkpoints/`: Lưu trữ model weights
+
+## Quy Tắc Coding
+
+### Python Code
+- Tuân thủ PEP 8
+- Tối ưu cho môi trường production
+- Tối ưu hiệu năng khi có thể
+- Comments bằng tiếng Anh, ngắn gọn và cần thiết
+
+### Multi-GPU Training
+- Sử dụng TensorFlow MirroredStrategy
+- Batch size được tính toán cho cả global và per-replica
+- Steps per epoch dựa trên global batch size
+
+### Data Pipeline
+- Dữ liệu được chuẩn hóa về khoảng [0, 1]
+- Hỗ trợ nhiều định dạng dữ liệu (NPZ, TIFF)
+- Xử lý hiệu quả với large-scale datasets
+
+### Loss Functions
+- Hỗ trợ nhiều loss functions:
+  - SSIM (Structural Similarity)
+  - MS-SSIM (Multi-Scale SSIM)
+  - BCL1 (Binary Cross-Entropy + L1)
+  - FSS (Fractions Skill Score)
+  - KS (Kolmogorov-Smirnov)
+  - MAE (Mean Absolute Error)
+  - Combined losses (e.g., SSIM + MAE)
+
+## Quy Tắc Documentation
+- Giải thích bằng tiếng Việt
+- Code và comments bằng tiếng Anh
+- Tối thiểu hóa comments, chỉ khi cần thiết
+- Không tạo file documentation mới nếu không được yêu cầu
+
+## Performance Guidelines
+- Sử dụng mixed precision training khi có thể
+- Tối ưu batch size cho multi-GPU
+- Xử lý memory một cách hiệu quả
+- Kiểm tra batch consistency
+- Xử lý lỗi NaN/Inf trong quá trình training

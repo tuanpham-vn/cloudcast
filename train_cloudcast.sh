@@ -48,16 +48,16 @@ mkdir -p logs
 
 # Default parameters
 LOSS_FUNCTION="ssim"
-N_CHANNELS=4
-LEADTIME_CONDITIONING=15
+N_CHANNELS=9
+LEADTIME_CONDITIONING=20
 IMG_SIZE="512x512"
 DATASERIES_FILE=""
-DATASERIES_DIRECTORY=""
+DATASERIES_DIRECTORY="data"
 LABEL=""
 SEQUENCE_STRIDE_MINUTES=10
 SEQUENCE_OFFSET_MINUTES=0
 CHECKPOINT_PATH=""
-LEARNING_RATE="0.001"
+LEARNING_RATE=""
 MIXED_PRECISION=true  # Mặc định bật mixed precision
 
 # Parse command line arguments
@@ -123,8 +123,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --sequence_stride_minutes N Sequence stride in minutes (default: $SEQUENCE_STRIDE_MINUTES)"
             echo "  --sequence_offset_minutes N Sequence offset in minutes (default: $SEQUENCE_OFFSET_MINUTES)"
             echo "  --checkpoint_path PATH      Path to checkpoint for fine-tuning"
-            echo "  --learning_rate LR          Learning rate (default: 1e-3 for training, 5e-4 for fine-tuning)"
-            echo "  --no_mixed_precision        Disable mixed precision training (default: enabled if GPUs available)"
+            echo "  --learning_rate LR          Learning rate (default: auto - 5e-4 for SSIM, 1e-3 for others, 1e-5 for fine-tune)"
+            echo "  --no_mixed_precision        Disable mixed precision training (default: enabled, bfloat16 for SSIM)"
             echo "  --force_load_weights        Force load weights even with warnings (for fine-tuning)"
             echo "  --help                      Show this help"
             exit 0
@@ -187,9 +187,11 @@ if [ -n "$LEARNING_RATE" ]; then
     echo "Learning rate:     $LEARNING_RATE"
 else
     if [ -n "$CHECKPOINT_PATH" ]; then
-        echo "Learning rate:     1e-5 (default for fine-tuning)"
+        echo "Learning rate:     1e-5 (auto: fine-tuning)"
+    elif [[ "$LOSS_FUNCTION" == ssim* ]] || [[ "$LOSS_FUNCTION" == msssim* ]]; then
+        echo "Learning rate:     5e-4 (auto: SSIM loss)"
     else
-        echo "Learning rate:     1e-3 (default for training)"
+        echo "Learning rate:     1e-3 (auto: default)"
     fi
 fi
 echo "=========================================="
@@ -256,7 +258,7 @@ echo "Log saved to: $LOG_FILE"
 #   --dataseries_directory data \
 #   --label "ft_ssim_mae_50_50" \
 #   --checkpoint_path checkpoints/your_model/model.weights.h5
-#   # (không cần --learning_rate, script và Python sẽ dùng mặc định 1e-5 cho fine-tuning)
+  # (không cần --learning_rate, script và Python sẽ dùng mặc định 1e-5 cho fine-tuning)
 #
 # 0c. Training với SSIM + MAE trọng số 70%/30%:
 # # Dùng trực tiếp python để truyền loss:
@@ -329,3 +331,11 @@ echo "Log saved to: $LOG_FILE"
 #--dataseries_directory '/home/databourg/workspace/cloudcast/output_test'
 #
 #'''
+
+
+# bash train_cloudcast.sh \
+#   --dataseries_directory data \
+#   --label "ssim" \
+#   --checkpoint_path checkpoints/model.weights.h5
+#   --loss_function ssim
+#   --learning_rate 5e-4
