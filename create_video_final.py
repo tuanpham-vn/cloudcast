@@ -2,6 +2,7 @@
 """
 Script tạo video từ ảnh PNG - phiên bản hoàn chỉnh
 Hỗ trợ cả FFmpeg và OpenCV, xử lý đúng ảnh RGBA
+Hỗ trợ định dạng timestamp mới: YYYY-MM-DD-HH-MM.png từ production script
 """
 
 import os
@@ -19,13 +20,19 @@ def sort_by_timestamp(image_files):
     """Sắp xếp ảnh theo timestamp thực tế từ cũ đến mới"""
 
     def extract_timestamp(filename):
+        # Extract timestamp từ filename: YYYY-MM-DD-HH-MM.png (format production mới)
+        match = re.search(r'(\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.png', filename)
+        if match:
+            timestamp_str = match.group(1)
+            return datetime.strptime(timestamp_str, '%Y-%m-%d-%H-%M')
+
         # Extract timestamp từ filename: radar_YYYY-MM-DD_HHMM_pred.png (format cũ)
         match = re.search(r'radar_(\d{4}-\d{2}-\d{2}_\d{4})_pred\.png', filename)
         if match:
             timestamp_str = match.group(1)
             return datetime.strptime(timestamp_str, '%Y-%m-%d_%H%M')
 
-        # Extract timestamp từ filename: YYYY-MM-DD_HHMM_acc10.png (format mới)
+        # Extract timestamp từ filename: YYYY-MM-DD_HHMM_acc10.png (format cũ khác)
         match = re.search(r'(\d{4}-\d{2}-\d{2}_\d{4})_acc\d+\.png', filename)
         if match:
             timestamp_str = match.group(1)
@@ -36,7 +43,7 @@ def sort_by_timestamp(image_files):
     return sorted(image_files, key=extract_timestamp)
 
 
-def create_video_with_ffmpeg(input_dir="predictions/png", output_file="video_ffmpeg.mp4", fps=4):
+def create_video_with_ffmpeg(input_dir="production_output/png", output_file="video_ffmpeg.mp4", fps=4):
     """Tạo video sử dụng FFmpeg với xử lý kích thước ảnh"""
 
     # Tìm ảnh PNG và sắp xếp theo timestamp
@@ -50,13 +57,16 @@ def create_video_with_ffmpeg(input_dir="predictions/png", output_file="video_ffm
     print(f"Tìm thấy {len(image_files)} ảnh PNG")
 
     # Phân loại file theo pattern
+    production_files = [f for f in image_files if re.search(r'\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.png', f)]
     radar_files = [f for f in image_files if 'radar_' in f and '_pred.png' in f]
     acc_files = [f for f in image_files if re.search(r'\d{4}-\d{2}-\d{2}_\d{4}_acc\d+\.png', f)]
 
+    if production_files:
+        print(f"  - {len(production_files)} file YYYY-MM-DD-HH-MM.png (format production)")
     if radar_files:
         print(f"  - {len(radar_files)} file radar_*_pred.png (format cũ)")
     if acc_files:
-        print(f"  - {len(acc_files)} file YYYY-MM-DD_HHMM_acc*.png (format mới)")
+        print(f"  - {len(acc_files)} file YYYY-MM-DD_HHMM_acc*.png (format cũ khác)")
 
     print(f"Tạo video {fps} FPS...")
 
@@ -127,7 +137,7 @@ def create_video_with_ffmpeg(input_dir="predictions/png", output_file="video_ffm
         return False
 
 
-def create_video_with_opencv(input_dir="predictions/png", output_file="video_opencv.mp4", fps=4):
+def create_video_with_opencv(input_dir="production_output/png", output_file="video_opencv.mp4", fps=4):
     """Tạo video với OpenCV - xử lý RGBA đúng cách"""
 
     # Tìm ảnh PNG và sắp xếp theo timestamp
@@ -141,13 +151,16 @@ def create_video_with_opencv(input_dir="predictions/png", output_file="video_ope
     print(f"Tìm thấy {len(image_files)} ảnh PNG")
 
     # Phân loại file theo pattern
+    production_files = [f for f in image_files if re.search(r'\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.png', f)]
     radar_files = [f for f in image_files if 'radar_' in f and '_pred.png' in f]
     acc_files = [f for f in image_files if re.search(r'\d{4}-\d{2}-\d{2}_\d{4}_acc\d+\.png', f)]
 
+    if production_files:
+        print(f"  - {len(production_files)} file YYYY-MM-DD-HH-MM.png (format production)")
     if radar_files:
         print(f"  - {len(radar_files)} file radar_*_pred.png (format cũ)")
     if acc_files:
-        print(f"  - {len(acc_files)} file YYYY-MM-DD_HHMM_acc*.png (format mới)")
+        print(f"  - {len(acc_files)} file YYYY-MM-DD_HHMM_acc*.png (format cũ khác)")
 
     # Đọc ảnh đầu tiên để lấy kích thước
     first_img = Image.open(image_files[0])
@@ -221,8 +234,8 @@ def create_video_with_opencv(input_dir="predictions/png", output_file="video_ope
 
 
 def main():
-    input_dir = sys.argv[1] if len(sys.argv) > 1 else "predictions/png"
-    output_file = sys.argv[2] if len(sys.argv) > 2 else "predictions/png/prediction.mp4"
+    input_dir = sys.argv[1] if len(sys.argv) > 1 else "production_output/png"
+    output_file = sys.argv[2] if len(sys.argv) > 2 else "production_output/png/prediction.mp4"
     fps = int(sys.argv[3]) if len(sys.argv) > 3 else 2
 
     print("=" * 60)
@@ -265,3 +278,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ========================================
+# USAGE EXAMPLES
+# ========================================
+#
+# 1. Tạo video từ production output (format mới YYYY-MM-DD-HH-MM.png):
+# python create_video_final.py production_output production_output/prediction.mp4 2
+#
+# 2. Tạo video từ thư mục PNG với FPS tùy chỉnh:
+# python create_video_final.py /path/to/png/folder output_video.mp4 4
+#
+# 3. Sử dụng mặc định (production_output/png, 2 FPS):
+# python create_video_final.py
+#
+# Supported formats:
+# - YYYY-MM-DD-HH-MM.png (production script output)
+# - radar_YYYY-MM-DD_HHMM_pred.png (old format)
+# - YYYY-MM-DD_HHMM_acc10.png (old format)
+#

@@ -5,6 +5,12 @@ from datetime import datetime, timedelta
 from typing import List, Tuple, Dict
 from PIL import Image
 import gc
+try:
+    from osgeo import gdal, osr
+    GDAL_AVAILABLE = True
+except ImportError:
+    print("Warning: GDAL not available. Geospatial metadata will not be preserved.")
+    GDAL_AVAILABLE = False
 
 
 def parse_command_line():
@@ -48,9 +54,105 @@ def parse_command_line():
                        help="Force specific TOTAL number of channels including leadtime (to fix tensor shape mismatch)")
     parser.add_argument("--clip_values", action="store_true", default=True,
                        help="Clip input values to [0, 100] range before normalization (default: True)")
+    parser.add_argument("--preserve_geospatial", action="store_true", default=True,
+                       help="Preserve geospatial metadata in output TIF files (requires GDAL, default: True)")
     
     args = parser.parse_args()
     return args
+
+
+def read_geospatial_info(filepath: str) -> Dict:
+    """
+    Read geospatial information from TIF file using GDAL
+    
+    Args:
+        filepath: Path to TIF file
+        
+    Returns:
+        Dictionary containing geospatial metadata
+    """
+    if not GDAL_AVAILABLE:
+        return {}
+    
+    try:
+        dataset = gdal.Open(filepath, gdal.GA_ReadOnly)
+        if dataset is None:
+            print(f"Warning: Could not open {filepath} with GDAL")
+            return {}
+        
+        geotransform = dataset.GetGeoTransform()
+        projection = dataset.GetProjection()
+        
+        # Get spatial reference system info
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(projection)
+        
+        geospatial_info = {
+            'geotransform': geotransform,
+            'projection': projection,
+            'srs_wkt': srs.ExportToWkt(),
+            'width': dataset.RasterXSize,
+            'height': dataset.RasterYSize,
+            'bands': dataset.RasterCount
+        }
+        
+        dataset = None  # Close dataset
+        return geospatial_info
+        
+    except Exception as e:
+        print(f"Warning: Error reading geospatial info from {filepath}: {e}")
+        return {}
+
+
+def save_tif_with_geospatial_info(data: np.ndarray, filepath: str, 
+                                  geospatial_info: Dict, dtype=None):
+    """
+    Save numpy array as TIF file with geospatial information
+    
+    Args:
+        data: 2D numpy array
+        filepath: Output file path
+        geospatial_info: Geospatial metadata dictionary
+        dtype: GDAL data type
+    """
+    if not GDAL_AVAILABLE or not geospatial_info:
+        # Fallback to PIL if GDAL not available or no geospatial info
+        img = Image.fromarray(data.astype(np.float32), mode='F')
+        img.save(filepath)
+        return
+    
+    try:
+        # Create GDAL dataset
+        driver = gdal.GetDriverByName('GTiff')
+        height, width = data.shape
+        
+        # Use default GDAL float32 type if not specified
+        if dtype is None:
+            dtype = gdal.GDT_Float32
+        
+        dataset = driver.Create(filepath, width, height, 1, dtype)
+        
+        # Set geospatial information
+        if 'geotransform' in geospatial_info:
+            dataset.SetGeoTransform(geospatial_info['geotransform'])
+        
+        if 'projection' in geospatial_info:
+            dataset.SetProjection(geospatial_info['projection'])
+        
+        # Write data
+        band = dataset.GetRasterBand(1)
+        band.WriteArray(data)
+        band.FlushCache()
+        
+        # Close dataset
+        dataset = None
+        
+    except Exception as e:
+        print(f"Warning: Error saving TIF with geospatial info: {e}")
+        print("Falling back to PIL...")
+        # Fallback to PIL
+        img = Image.fromarray(data.astype(np.float32), mode='F')
+        img.save(filepath)
 
 
 def get_sequential_tif_files(timestamp: str, input_dir: str, n_input: int = 6, 
@@ -90,32 +192,44 @@ def get_sequential_tif_files(timestamp: str, input_dir: str, n_input: int = 6,
     return files
 
 
-def read_tif_file(filepath: str, clip_values: bool = True) -> np.ndarray:
+def read_tif_file(filepath: str, clip_values: bool = True, use_gdal: bool = False) -> np.ndarray:
     """
     Read TIF file and return normalized array
     
     Args:
         filepath: Path to TIF file
         clip_values: Whether to clip values to [0, 100] range before normalization
+        use_gdal: Whether to use GDAL for reading (preserves geospatial info)
         
     Returns:
         Normalized array with values in [0, 1] range
     """
     try:
-        with Image.open(filepath) as img:
-            if img.mode != 'L':
-                img = img.convert('L')
-            # Read data directly as float32
-            data = np.array(img, dtype=np.float32)
+        if use_gdal and GDAL_AVAILABLE:
+            # Use GDAL to read the file
+            dataset = gdal.Open(filepath, gdal.GA_ReadOnly)
+            if dataset is None:
+                raise RuntimeError(f"GDAL could not open {filepath}")
             
-            # Clip values to [0, 100] range if requested
-            if clip_values:
-                data = np.clip(data, 0, 100)
-            
-            # Normalize to [0, 1] range by multiplying with 0.01
-            data = data * 0.01
-            
-            return data
+            band = dataset.GetRasterBand(1)
+            data = band.ReadAsArray().astype(np.float32)
+            dataset = None  # Close dataset
+        else:
+            # Use PIL (original method)
+            with Image.open(filepath) as img:
+                if img.mode != 'L':
+                    img = img.convert('L')
+                # Read data directly as float32
+                data = np.array(img, dtype=np.float32)
+        
+        # Clip values to [0, 100] range if requested
+        if clip_values:
+            data = np.clip(data, 0, 100)
+        
+        # Normalize to [0, 1] range by multiplying with 0.01
+        data = data * 0.01
+        
+        return data
     except Exception as e:
         raise RuntimeError(f"Error reading {filepath}: {e}")
 
@@ -170,7 +284,7 @@ def extract_patches_sliding_window(image: np.ndarray, patch_size: Tuple[int, int
 
 
 def load_and_extract_patches(tif_files: List[str], patch_size: int, 
-                             overlap_ratio: float, clip_values: bool = True) -> Tuple[List[np.ndarray], List[Dict], Tuple[int, int]]:
+                             overlap_ratio: float, clip_values: bool = True) -> Tuple[List[np.ndarray], List[Dict], Tuple[int, int], Dict]:
     """
     Load TIF files and extract patches
     
@@ -184,8 +298,14 @@ def load_and_extract_patches(tif_files: List[str], patch_size: int,
         patch_sequences: List of (n_input, H, W, 1) arrays
         positions: List of position metadata
         image_shape: Original image shape (H, W)
+        geospatial_info: Geospatial metadata from first file
     """
     print(f"\nLoading {len(tif_files)} TIF files...")
+    
+    # Read geospatial information from the first file
+    geospatial_info = read_geospatial_info(tif_files[0]) if tif_files else {}
+    if geospatial_info:
+        print(f"  ✓ Read geospatial metadata from {os.path.basename(tif_files[0])}")
     
     images = []
     for filepath in tif_files:
@@ -219,7 +339,7 @@ def load_and_extract_patches(tif_files: List[str], patch_size: int,
     
     print(f"  ✓ Extracted {n_patches} patches")
     
-    return patch_sequences, positions, image_shape
+    return patch_sequences, positions, image_shape, geospatial_info
 
 
 def load_model_auto(model_path: str, patch_h: int, patch_w: int, n_channels: int, force_n_channels: int = None):
@@ -550,7 +670,7 @@ def assemble_predictions(predictions: List[np.ndarray], positions: List[Dict],
 
 def save_predictions(outputs: List[np.ndarray], output_dir: str, 
                     base_timestamp: str, sequence_stride_minutes: int = 10,
-                    clip_values: bool = True):
+                    clip_values: bool = True, geospatial_info: Dict = None):
     """
     Save predictions as TIF files (multiply by 100 for visualization)
     
@@ -560,11 +680,14 @@ def save_predictions(outputs: List[np.ndarray], output_dir: str,
         base_timestamp: Base timestamp string
         sequence_stride_minutes: Stride in minutes between predictions
         clip_values: Whether to clip values (kept for compatibility, but no longer used)
+        geospatial_info: Geospatial metadata to preserve in output files
     """
     os.makedirs(output_dir, exist_ok=True)
     
     print(f"\nSaving {len(outputs)} TIF files to {output_dir}...")
     print(f"  Using {sequence_stride_minutes}-minute time stride")
+    if geospatial_info:
+        print(f"  ✓ Preserving geospatial metadata")
     
     dt_base = datetime.strptime(base_timestamp, '%Y-%m-%d-%H-%M')
     output_files = []
@@ -578,8 +701,14 @@ def save_predictions(outputs: List[np.ndarray], output_dir: str,
         
         # Multiply by 100 for visualization (model output * 100)
         frame_100 = frame * 100.0
-        img = Image.fromarray(frame_100.astype(np.float32), mode='F')
-        img.save(filepath)
+        
+        # Save with geospatial information if available
+        if geospatial_info and GDAL_AVAILABLE:
+            save_tif_with_geospatial_info(frame_100, filepath, geospatial_info)
+        else:
+            # Fallback to PIL
+            img = Image.fromarray(frame_100.astype(np.float32), mode='F')
+            img.save(filepath)
         
         output_files.append(filepath)
         print(f"  ✓ {filename} | range=[{frame.min():.4f}, {frame.max():.4f}] (model) | range=[{frame_100.min():.2f}, {frame_100.max():.2f}] (x100)")
@@ -766,6 +895,7 @@ def main():
     if args.force_n_channels:
         print(f"Force total channels:  {args.force_n_channels} (data={n_data_channels} + leadtime=1)")
     print(f"Clip values:           {'Yes' if args.clip_values else 'No'} (input normalization, output x100 for visualization)")
+    print(f"Preserve geospatial:   {'Yes' if args.preserve_geospatial else 'No'} (requires GDAL)")
     print("="*80)
     
     try:
@@ -777,7 +907,7 @@ def main():
         )
         n_input_frames = len(tif_files)
         
-        patch_sequences, positions, image_shape = load_and_extract_patches(
+        patch_sequences, positions, image_shape, geospatial_info = load_and_extract_patches(
             tif_files, 
             args.patch_size, 
             args.overlap_ratio,
@@ -810,7 +940,8 @@ def main():
             args.output_dir, 
             args.timestamp,
             sequence_stride_minutes=args.sequence_stride_minutes,
-            clip_values=args.clip_values
+            clip_values=args.clip_values,
+            geospatial_info=geospatial_info if args.preserve_geospatial else None
         )
         
         viz_results = create_visualization_outputs(
